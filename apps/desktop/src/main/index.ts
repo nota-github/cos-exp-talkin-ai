@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
+import { createPersistentAppSettingsService } from './settings/index.ts';
 import { createMainWindowOptions } from './window-config';
 
 let mainWindow: BrowserWindow | null = null;
@@ -17,6 +18,9 @@ function registerIpcHandlers() {
         window.webContents.send(channel, payload);
       }
     },
+    settingsService: createPersistentAppSettingsService({
+      dbPath: join(app.getPath('userData'), 'talkin-ai.db'),
+    }),
   });
 
   ipcHandlersRegistered = true;

@@ -1,6 +1,7 @@
 export {
   getSchemaVersion,
   migrateCoreSchema,
+  migrateDesktopSchema,
   openSqliteDatabase,
   resolveBundledSqliteBinaryPath,
 } from './database';
