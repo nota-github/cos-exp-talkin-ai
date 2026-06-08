@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-type CoreSchemaMigration = {
+type SchemaMigration = {
   id: number;
   name: string;
   sql: string;
@@ -29,7 +29,7 @@ const bundledSqliteBinaryRelativePath = join(
   'sqlite3-launcher',
 );
 
-const coreSchemaMigrations: CoreSchemaMigration[] = [
+const coreSchemaMigrations: SchemaMigration[] = [
   {
     id: 1,
     name: 'core_chat_run_schema',
@@ -118,6 +118,21 @@ const coreSchemaMigrations: CoreSchemaMigration[] = [
         estimated_cost_with_optimization REAL NOT NULL,
         pricing_version TEXT NOT NULL,
         latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0)
+      );
+    `,
+  },
+];
+
+const desktopSchemaMigrations: SchemaMigration[] = [
+  ...coreSchemaMigrations,
+  {
+    id: 2,
+    name: 'settings_schema',
+    sql: `
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
       );
     `,
   },
@@ -361,10 +376,13 @@ export async function getSchemaVersion(connection: SqliteConnection): Promise<nu
   return rows[0]?.user_version ?? 0;
 }
 
-export async function migrateCoreSchema(connection: SqliteConnection): Promise<number> {
+async function applySchemaMigrations(
+  connection: SqliteConnection,
+  migrations: SchemaMigration[],
+): Promise<number> {
   let currentVersion = await getSchemaVersion(connection);
 
-  for (const migration of coreSchemaMigrations) {
+  for (const migration of migrations) {
     if (migration.id <= currentVersion) {
       continue;
     }
@@ -390,4 +408,12 @@ export async function migrateCoreSchema(connection: SqliteConnection): Promise<n
   }
 
   return currentVersion;
+}
+
+export async function migrateCoreSchema(connection: SqliteConnection): Promise<number> {
+  return applySchemaMigrations(connection, coreSchemaMigrations);
+}
+
+export async function migrateDesktopSchema(connection: SqliteConnection): Promise<number> {
+  return applySchemaMigrations(connection, desktopSchemaMigrations);
 }

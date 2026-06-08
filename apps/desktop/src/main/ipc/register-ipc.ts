@@ -19,6 +19,11 @@ import {
   type UsageDashboardResult,
   type WorkbenchLayoutResult,
 } from '../../shared/ipc/contracts';
+import {
+  createInMemoryAppSettingsService,
+  defaultAppSettings,
+  type AppSettingsService,
+} from '../settings/index.ts';
 
 type InternalTaskRecord = {
   taskId: string;
@@ -36,7 +41,6 @@ type InternalTaskRecord = {
 };
 
 type DesktopIpcState = {
-  settings: AppSettings;
   chatFeed: DesktopQueryResponse<'getChatFeed'>;
   workbenchLayout: WorkbenchLayoutResult;
   boardColumns: BoardColumnsResult;
@@ -77,6 +81,7 @@ export type DesktopIpcBroadcaster = (channel: string, payload: unknown) => void;
 export type RegisterDesktopIpcOptions = {
   broadcast?: DesktopIpcBroadcaster;
   state?: DesktopIpcState;
+  settingsService?: AppSettingsService;
 };
 
 export type DesktopIpcService = {
@@ -108,14 +113,6 @@ function nowIso() {
 }
 
 function createInitialState(): DesktopIpcState {
-  const settings: AppSettings = {
-    defaultModel: 'gpt-4.1',
-    optimizationMode: 'balanced',
-    responseLanguage: 'ko',
-    theme: 'system',
-    advancedPromptPreview: false,
-  };
-
   const primaryTask: InternalTaskRecord = {
     taskId: 'task-001',
     conversationId: 'conv-001',
@@ -168,7 +165,6 @@ function createInitialState(): DesktopIpcState {
   };
 
   const state: DesktopIpcState = {
-    settings,
     chatFeed: {
       activeConversationId: primaryTask.conversationId,
       recommendedPrompts: [
@@ -402,6 +398,7 @@ function emitInvalidation(
 
 export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {}): DesktopIpcService {
   const state = options.state ?? createInitialState();
+  const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
 
   const commands: CommandHandlerMap = {
     submitPrompt: async (request) => {
@@ -610,10 +607,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
     },
     updateSettings: async (request) => {
       const updatedKeys = Object.keys(request.patch) as Array<keyof AppSettings>;
-      state.settings = {
-        ...state.settings,
-        ...request.patch,
-      };
+      const settings = await settingsService.updateSettings(request.patch);
 
       emitInvalidation(state, options.broadcast, 'updateSettings', [
         {
@@ -628,7 +622,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       ]);
 
       return {
-        settings: clone(state.settings),
+        settings,
         updatedKeys,
       };
     },
@@ -644,7 +638,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
     getUsageDashboard: async (request) => clone(state.usageDashboards[request.range]),
     getHistoryEntry: async (request) => clone(ensureHistoryEntry(state, request.runId)),
-    getSettings: async () => clone(state.settings),
+    getSettings: async () => settingsService.getSettings(),
   };
 
   return {
