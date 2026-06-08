@@ -15,6 +15,7 @@ import { createPersistentProjectService } from '../src/main/projects/index.ts';
 import {
   filterProjectTasks,
   getBoardSurfaceState,
+  getProjectDetailSurfaceState,
   getProjectHubSurfaceState,
   openBoardTaskInChat,
   openBoardTaskInWorkbench,
@@ -658,11 +659,54 @@ test('story-5.6:VAL-3 and story-5.6:AC-5 project hub surface distinguishes loadi
   assert.equal(populatedState.unlinkedTaskCount, 1);
   assert.match(projectsRouteSource, /긴 한국어 작업을 묶고, 흐름과 연결 상태를 한 번에 정리하세요/);
   assert.match(projectsRouteSource, /아직 만든 프로젝트가 없습니다/);
-  assert.match(projectsRouteSource, /최근 task 인박스/);
+  assert.match(projectsRouteSource, /최근 작업 인박스/);
   assert.match(projectsRouteSource, /보조 흐름 보드/);
   assert.match(projectsStylesSource, /\.project-hub-layout\s*\{/);
   assert.match(projectsStylesSource, /\.project-list-card\s*\{/);
   assert.match(projectsStylesSource, /\.project-task-command-card\s*\{/);
+});
+
+test('story-6.4:SCOPE-1, story-6.4:SCOPE-3, and story-6.4:AC-4 cached project surfaces stay interactive while exposing sync warnings', () => {
+  const projectHubState = getProjectHubSurfaceState({
+    desktopAvailable: true,
+    queryStatus: 'error',
+    projectList: previewProjectList,
+  });
+  const boardState = getBoardSurfaceState({
+    desktopAvailable: true,
+    queryStatus: 'error',
+    boardColumns: previewBoardColumns,
+  });
+  const detailState = getProjectDetailSurfaceState({
+    desktopAvailable: true,
+    queryStatus: 'error',
+    projectDetail: previewProjectDetails['project-001'],
+    hasSelectedProject: true,
+  });
+
+  assert.equal(projectHubState.showErrorState, false);
+  assert.equal(projectHubState.showSyncWarningState, true);
+  assert.equal(projectHubState.showInteractiveContent, true);
+  assert.equal(projectHubState.projects.length, previewProjectList.projects.length);
+  assert.equal(boardState.showErrorState, false);
+  assert.equal(boardState.showSyncWarningState, true);
+  assert.equal(boardState.showInteractiveContent, true);
+  assert.equal(boardState.totalTaskCount, 4);
+  assert.equal(detailState.showErrorState, false);
+  assert.equal(detailState.showSyncWarningState, true);
+  assert.equal(detailState.showInteractiveContent, true);
+  assert.match(projectsRouteSource, /마지막으로 동기화된 프로젝트 목록을 보여주고 있습니다/);
+  assert.match(projectsRouteSource, /프로젝트 허브 다시 동기화/);
+  assert.match(projectsRouteSource, /마지막으로 동기화된 칸반 상태를 보여주고 있습니다/);
+  assert.match(projectsRouteSource, /칸반 다시 동기화/);
+  assert.match(projectsRouteSource, /세부 정보 보기/);
+  assert.match(projectsRouteSource, /getProjectTaskSourceLabel\(task\.sourceScreen\)/);
+  assert.match(projectsRouteSource, /<QueryDiagnostic diagnostic=\{projectListErrorCopy\.diagnostic\} \/>/);
+  assert.match(projectsRouteSource, /<QueryDiagnostic diagnostic=\{boardSyncWarningCopy\.diagnostic\} \/>/);
+  assert.doesNotMatch(
+    projectsRouteSource,
+    /projectListQuery\.error\?\.message|projectDetailQuery\.error\?\.message|boardQuery\.error\?\.message|시작 화면 \{task\.sourceScreen\}/,
+  );
 });
 
 test('story-5.7:VAL-1, story-5.7:AC-1, and story-5.7:AC-2 project detail returns rich task, file, and activity data and supports in-project task search', async () => {
@@ -801,7 +845,7 @@ test('story-5.7:VAL-2 and story-5.7:AC-3 project detail task actions can open th
   assert.equal(openedChat, true);
   assert.equal(chatPath, '/?conversationId=conversation-301');
   assert.match(projectsRouteSource, /작업대에서 이어가기/);
-  assert.match(projectsRouteSource, /연결된 task 검색/);
+  assert.match(projectsRouteSource, /연결된 작업 검색/);
   assert.match(projectsRouteSource, /최근 대화 맥락/);
 });
 
@@ -815,7 +859,7 @@ test('story-5.7:VAL-3, story-5.7:AC-4, story-5.7:AC-5, and story-5.7:AC-6 projec
   assert.equal(emptyFileDetail.tasks[0]?.conversationId, 'preview-conversation-001');
   assert.equal(emptyFileDetail.recentActivity[0]?.taskId, 'preview-task-001');
   assert.match(projectsRouteSource, /프로젝트 상세 허브/);
-  assert.match(projectsRouteSource, /task, 파일, 대화 흐름을 함께 봅니다/);
+  assert.match(projectsRouteSource, /작업, 파일, 대화 흐름을 함께 봅니다/);
   assert.match(projectsRouteSource, /첫 참고 파일이 아직 없습니다/);
   assert.match(projectsRouteSource, /방금 이어진 의도와 후속 지시/);
   assert.match(projectsStylesSource, /\.project-detail-grid\s*\{/);

@@ -6,11 +6,13 @@ import {
   getDesktopQueryCache,
   getRendererDesktopClient,
 } from '../lib/ipc/query-client';
+import { getSafeDesktopErrorCopy } from '../lib/ipc/error-copy';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
 import {
   filterProjectTasks,
   formatProjectFileSize,
   getBoardStatusLabel,
+  getProjectDetailSurfaceState,
   getBoardSurfaceState,
   getProjectHubSurfaceState,
   getProjectTaskSourceLabel,
@@ -78,6 +80,19 @@ function getProjectLinkActionLabel(
   }
 
   return '이 프로젝트로 옮기기';
+}
+
+function QueryDiagnostic({ diagnostic }: { diagnostic: string | null }) {
+  if (!diagnostic) {
+    return null;
+  }
+
+  return (
+    <details className="state-diagnostic">
+      <summary>세부 정보 보기</summary>
+      <p>{diagnostic}</p>
+    </details>
+  );
 }
 
 export function ProjectsRoute() {
@@ -372,7 +387,7 @@ export function ProjectsRoute() {
         setSelectedProjectId(createdProject.projectId);
         setNotice({
           tone: 'success',
-          message: `${nextDraft.name} 프로젝트를 만들었습니다. 이제 기존 task를 이 허브에 연결할 수 있습니다.`,
+          message: `${nextDraft.name} 프로젝트를 만들었습니다. 이제 기존 작업을 이 허브에 연결할 수 있습니다.`,
         });
         void queryCache.fetchQuery(projectListDescriptor);
         void queryCache.fetchQuery(
@@ -430,17 +445,17 @@ export function ProjectsRoute() {
         tone: 'success',
         message:
           nextProjectId === null
-            ? 'task를 프로젝트에서 분리했습니다.'
-            : `${projectName}에 task를 연결했습니다.`,
+            ? '작업을 프로젝트에서 분리했습니다.'
+            : `${projectName}에 작업을 연결했습니다.`,
       });
     } catch {
       setTaskErrors((current) => ({
         ...current,
-        [taskId]: 'task 연결 상태를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+        [taskId]: '작업 연결 상태를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.',
       }));
       setNotice({
         tone: 'error',
-        message: 'task 연결 상태를 저장하지 못했습니다. 같은 작업은 그대로 유지됩니다.',
+        message: '작업 연결 상태를 저장하지 못했습니다. 같은 작업은 그대로 유지됩니다.',
       });
     } finally {
       setPendingTaskIds((current) => ({
@@ -457,17 +472,39 @@ export function ProjectsRoute() {
   const recentTasks = projectHubState.recentTasks.filter(
     (task) => task.projectId !== resolvedSelectedProjectId,
   );
-  const showProjectDetailLoading =
-    desktopClient.available &&
-    !isCreatingProject &&
-    resolvedSelectedProjectId !== null &&
-    (projectDetailQuery.status === 'idle' || projectDetailQuery.status === 'loading') &&
-    projectDetailQuery.data === null;
-  const showProjectDetailError =
-    desktopClient.available &&
-    !isCreatingProject &&
-    resolvedSelectedProjectId !== null &&
-    projectDetailQuery.status === 'error';
+  const projectDetailSurfaceState = getProjectDetailSurfaceState({
+    desktopAvailable: desktopClient.available && !isCreatingProject,
+    queryStatus: projectDetailQuery.status,
+    projectDetail: projectDetailQuery.data,
+    hasSelectedProject: resolvedSelectedProjectId !== null,
+  });
+  const projectListErrorCopy = getSafeDesktopErrorCopy(
+    projectListQuery.error,
+    '프로젝트 허브 목록을 다시 불러와 주세요.',
+  );
+  const projectListSyncWarningCopy = getSafeDesktopErrorCopy(
+    projectListQuery.error,
+    '최근 재조회가 실패해 마지막으로 확인된 프로젝트 허브 상태를 유지했습니다. 최신 연결 상태를 다시 확인해 주세요.',
+  );
+  const projectDetailErrorCopy = getSafeDesktopErrorCopy(
+    projectDetailQuery.error,
+    '선택한 프로젝트 상태를 다시 동기화해 주세요.',
+  );
+  const projectDetailSyncWarningCopy = getSafeDesktopErrorCopy(
+    projectDetailQuery.error,
+    '최근 재조회가 실패해 마지막으로 확인된 작업, 파일, 대화 맥락을 계속 보여주고 있습니다. 최신 상태를 다시 확인해 주세요.',
+  );
+  const boardErrorCopy = getSafeDesktopErrorCopy(
+    boardQuery.error,
+    '칸반 보드 상태를 다시 확인해 주세요.',
+  );
+  const boardSyncWarningCopy = getSafeDesktopErrorCopy(
+    boardQuery.error,
+    '최근 재조회가 실패해 마지막으로 확인된 작업 흐름을 유지했습니다. 상태 변경이 반영됐는지 다시 동기화해 주세요.',
+  );
+  const showProjectDetailLoading = projectDetailSurfaceState.showLoadingState;
+  const showProjectDetailError = projectDetailSurfaceState.showErrorState;
+  const showProjectDetailSyncWarning = projectDetailSurfaceState.showSyncWarningState;
   const canManageProjectFiles =
     desktopClient.available &&
     !isCreatingProject &&
@@ -480,6 +517,18 @@ export function ProjectsRoute() {
       ? '파일 추가'
       : '파일 연결';
 
+  async function refreshProjectList() {
+    await queryCache.fetchQuery(projectListDescriptor);
+  }
+
+  async function refreshBoard() {
+    await queryCache.fetchQuery(boardDescriptor);
+  }
+
+  async function refreshProjectDetail() {
+    await queryCache.fetchQuery(projectDetailDescriptor);
+  }
+
   return (
     <section className="screen screen-projects">
       <header className="screen-header">
@@ -487,12 +536,12 @@ export function ProjectsRoute() {
           <span className="screen-kicker">프로젝트 허브</span>
           <h1>긴 한국어 작업을 묶고, 흐름과 연결 상태를 한 번에 정리하세요</h1>
           <p>
-            프로젝트는 단순 설정 묶음이 아니라 장기 작업의 입구입니다. 채팅에서 시작한 task를
+            프로젝트는 단순 설정 묶음이 아니라 장기 작업의 입구입니다. 채팅에서 시작한 작업을
             연결하고, 필요할 때만 보조 칸반으로 넘어가 같은 작업 흐름을 계속 관리합니다.
           </p>
           <div className="chip-row">
             <span className="badge badge-primary">프로젝트 목록 + 에디터</span>
-            <span className="badge badge-success">task 연결 상태 즉시 동기화</span>
+            <span className="badge badge-success">작업 연결 상태 즉시 동기화</span>
             <span className="badge badge-muted">
               {projectHubState.previewMode ? '미리보기 모드' : '실시간 데스크탑 허브'}
             </span>
@@ -525,7 +574,7 @@ export function ProjectsRoute() {
               <span className="hero-stat-label">열린 프로젝트 허브</span>
               <strong>{projectHubState.totalProjectCount}개</strong>
               <p>
-                연결된 task {projectHubState.linkedTaskCount}개 · 미지정 task {projectHubState.unlinkedTaskCount}개
+                연결된 작업 {projectHubState.linkedTaskCount}개 · 미지정 작업 {projectHubState.unlinkedTaskCount}개
               </p>
             </>
           ) : (
@@ -547,7 +596,7 @@ export function ProjectsRoute() {
               <div>
                 <span className="panel-kicker">프로젝트 목록</span>
                 <h3>최근 활동 순으로 허브를 정렬합니다</h3>
-                <p>연결된 task 활동 또는 프로젝트 수정 시점을 기준으로 위로 올립니다.</p>
+                <p>연결된 작업 활동 또는 프로젝트 수정 시점을 기준으로 위로 올립니다.</p>
               </div>
               <button
                 type="button"
@@ -570,15 +619,33 @@ export function ProjectsRoute() {
               <article className="project-state-card project-state-card-error">
                 <span className="panel-kicker">동기화 오류</span>
                 <strong>프로젝트 허브 목록을 불러오지 못했습니다</strong>
-                <p>{projectListQuery.error?.message ?? '데스크탑 브리지 응답을 다시 확인해 주세요.'}</p>
+                <p>{projectListErrorCopy.primary}</p>
+                <QueryDiagnostic diagnostic={projectListErrorCopy.diagnostic} />
                 <button
                   type="button"
                   className="soft-button"
                   onClick={() => {
-                    void queryCache.fetchQuery(projectListDescriptor);
+                    void refreshProjectList();
                   }}
                 >
                   다시 불러오기
+                </button>
+              </article>
+            ) : null}
+
+            {projectHubState.showSyncWarningState ? (
+              <article className="project-inline-feedback project-inline-feedback-error">
+                <strong>마지막으로 동기화된 프로젝트 목록을 보여주고 있습니다</strong>
+                <p>{projectListSyncWarningCopy.primary}</p>
+                <QueryDiagnostic diagnostic={projectListSyncWarningCopy.diagnostic} />
+                <button
+                  type="button"
+                  className="soft-button"
+                  onClick={() => {
+                    void refreshProjectList();
+                  }}
+                >
+                  프로젝트 허브 다시 동기화
                 </button>
               </article>
             ) : null}
@@ -589,7 +656,7 @@ export function ProjectsRoute() {
                   <article className="project-list-empty">
                     <span className="panel-kicker">첫 프로젝트</span>
                     <strong>아직 만든 프로젝트가 없습니다</strong>
-                    <p>먼저 장기 작업 묶음을 만들고, 그 다음 기존 채팅 task를 여기에 연결해 보세요.</p>
+                      <p>먼저 장기 작업 묶음을 만들고, 그 다음 기존 채팅 작업을 여기에 연결해 보세요.</p>
                     <button
                       type="button"
                       className="primary-button"
@@ -611,7 +678,7 @@ export function ProjectsRoute() {
                     >
                       <div className="project-list-card-top">
                         <span className="panel-kicker">허브</span>
-                        <span className="badge badge-muted">{project.taskCount}개 task</span>
+                        <span className="badge badge-muted">{project.taskCount}개 작업</span>
                       </div>
                       <strong>{project.name}</strong>
                       <p>{project.description}</p>
@@ -637,7 +704,7 @@ export function ProjectsRoute() {
                       : selectedProjectSummary?.name ?? '프로젝트를 선택하세요'}
                   </h3>
                   <p>
-                    이름, 설명, 목표를 먼저 맞추고 나면 이후 task 연결과 상세 허브 확장이 같은 축으로 이어집니다.
+                    이름, 설명, 목표를 먼저 맞추고 나면 이후 작업 연결과 상세 허브 확장이 같은 축으로 이어집니다.
                   </p>
                 </div>
                 <span className="badge badge-primary">
@@ -656,11 +723,28 @@ export function ProjectsRoute() {
                 </article>
               ) : null}
 
+              {showProjectDetailSyncWarning ? (
+                <article className="project-inline-feedback project-inline-feedback-error">
+                  <strong>마지막으로 동기화된 프로젝트 허브를 유지하고 있습니다</strong>
+                  <p>{projectDetailSyncWarningCopy.primary}</p>
+                  <QueryDiagnostic diagnostic={projectDetailSyncWarningCopy.diagnostic} />
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={() => {
+                      void refreshProjectDetail();
+                    }}
+                  >
+                    프로젝트 허브 다시 동기화
+                  </button>
+                </article>
+              ) : null}
+
               {showProjectDetailLoading ? (
                 <article className="project-state-card">
                   <span className="panel-kicker">불러오는 중</span>
                   <strong>선택한 프로젝트 세부 정보를 불러오는 중입니다</strong>
-                  <p>연결된 task와 파일 맥락을 정리하는 동안 잠시만 기다려 주세요.</p>
+                  <p>연결된 작업과 파일 맥락을 정리하는 동안 잠시만 기다려 주세요.</p>
                 </article>
               ) : null}
 
@@ -668,12 +752,13 @@ export function ProjectsRoute() {
                 <article className="project-state-card project-state-card-error">
                   <span className="panel-kicker">세부 정보 오류</span>
                   <strong>선택한 프로젝트 세부 정보를 불러오지 못했습니다</strong>
-                  <p>{projectDetailQuery.error?.message ?? '프로젝트 상태를 다시 동기화해 주세요.'}</p>
+                  <p>{projectDetailErrorCopy.primary}</p>
+                  <QueryDiagnostic diagnostic={projectDetailErrorCopy.diagnostic} />
                   <button
                     type="button"
                     className="soft-button"
                     onClick={() => {
-                      void queryCache.fetchQuery(projectDetailDescriptor);
+                      void refreshProjectDetail();
                     }}
                   >
                     다시 불러오기
@@ -762,7 +847,7 @@ export function ProjectsRoute() {
                   </div>
 
                   <div className="project-editor-footnote">
-                    <span>프로젝트를 저장한 뒤 task를 연결하면 이후 작업대, 칸반, 상세 허브가 같은 맥락을 공유합니다.</span>
+                    <span>프로젝트를 저장한 뒤 작업을 연결하면 이후 작업대, 칸반, 상세 허브가 같은 맥락을 공유합니다.</span>
                     <span>{desktopClient.available ? '실제 저장 가능' : '미리보기에서는 읽기 전용'}</span>
                   </div>
                 </form>
@@ -777,16 +862,16 @@ export function ProjectsRoute() {
                     {isCreatingProject
                       ? '허브 저장 후 세부 맥락이 열립니다'
                       : selectedProjectSummary
-                        ? `${selectedProjectSummary.name} 안에서 task, 파일, 대화 흐름을 함께 봅니다`
+                        ? `${selectedProjectSummary.name} 안에서 작업, 파일, 대화 흐름을 함께 봅니다`
                         : '프로젝트를 선택하면 세부 허브가 열립니다'}
                   </h3>
                   <p>
-                    선택한 프로젝트 안에서 연결된 task를 검색하고, 참고 파일과 최근 대화 맥락을
+                    선택한 프로젝트 안에서 연결된 작업을 검색하고, 참고 파일과 최근 대화 맥락을
                     한 화면에서 이어서 확인할 수 있습니다.
                   </p>
                 </div>
                 <div className="project-detail-header-badges">
-                  <span className="badge badge-primary">{linkedTasks.length}개 task</span>
+                  <span className="badge badge-primary">{linkedTasks.length}개 작업</span>
                   <span className="badge badge-success">
                     {selectedProjectDetail?.files.length ?? 0}개 파일
                   </span>
@@ -797,7 +882,7 @@ export function ProjectsRoute() {
                 <article className="project-state-card">
                   <span className="panel-kicker">저장 후 허브 열림</span>
                   <strong>프로젝트를 저장하면 상세 허브가 바로 채워집니다</strong>
-                  <p>먼저 이름과 목표를 저장한 뒤, 연결된 task와 참고 파일 맥락을 이 영역에서 함께 관리하세요.</p>
+                  <p>먼저 이름과 목표를 저장한 뒤, 연결된 작업과 참고 파일 맥락을 이 영역에서 함께 관리하세요.</p>
                 </article>
               ) : null}
 
@@ -805,7 +890,7 @@ export function ProjectsRoute() {
                 <article className="project-state-card">
                   <span className="panel-kicker">허브 선택 필요</span>
                   <strong>왼쪽에서 프로젝트를 고르면 장기 작업 허브가 열립니다</strong>
-                  <p>선택된 프로젝트마다 연결 task 검색, 파일 확인, 최근 대화 맥락이 이 자리에서 함께 보입니다.</p>
+                  <p>선택된 프로젝트마다 연결 작업 검색, 파일 확인, 최근 대화 맥락이 이 자리에서 함께 보입니다.</p>
                 </article>
               ) : null}
 
@@ -813,7 +898,7 @@ export function ProjectsRoute() {
                 <article className="project-state-card">
                   <span className="panel-kicker">불러오는 중</span>
                   <strong>선택한 프로젝트 허브를 불러오는 중입니다</strong>
-                  <p>연결된 task, 파일, 최근 대화 맥락을 한 번에 정리하는 동안 잠시만 기다려 주세요.</p>
+                  <p>연결된 작업, 파일, 최근 대화 맥락을 한 번에 정리하는 동안 잠시만 기다려 주세요.</p>
                 </article>
               ) : null}
 
@@ -821,12 +906,13 @@ export function ProjectsRoute() {
                 <article className="project-state-card project-state-card-error">
                   <span className="panel-kicker">허브 동기화 오류</span>
                   <strong>프로젝트 상세 허브를 불러오지 못했습니다</strong>
-                  <p>{projectDetailQuery.error?.message ?? '프로젝트 상세 상태를 다시 동기화해 주세요.'}</p>
+                  <p>{projectDetailErrorCopy.primary}</p>
+                  <QueryDiagnostic diagnostic={projectDetailErrorCopy.diagnostic} />
                   <button
                     type="button"
                     className="soft-button"
                     onClick={() => {
-                      void queryCache.fetchQuery(projectDetailDescriptor);
+                      void refreshProjectDetail();
                     }}
                   >
                     다시 불러오기
@@ -857,7 +943,7 @@ export function ProjectsRoute() {
                     </div>
                     <div className="project-detail-hero-metrics">
                       <div className="project-detail-metric">
-                        <span>연결된 task</span>
+                        <span>연결된 작업</span>
                         <strong>{linkedTasks.length}</strong>
                       </div>
                       <div className="project-detail-metric">
@@ -875,14 +961,14 @@ export function ProjectsRoute() {
                     <section className="project-detail-section project-detail-task-section">
                       <div className="project-detail-section-header">
                         <div>
-                          <span className="panel-kicker">연결된 task 검색</span>
+                          <span className="panel-kicker">연결된 작업 검색</span>
                           <h4>이 프로젝트 안에서 바로 이어갈 작업</h4>
                         </div>
                         <span className="badge badge-muted">{filteredLinkedTasks.length}개 표시</span>
                       </div>
 
                       <label className="project-detail-search">
-                        <span>task 검색</span>
+                        <span>작업 검색</span>
                         <input
                           value={projectTaskSearch}
                           onChange={(event) => {
@@ -894,9 +980,9 @@ export function ProjectsRoute() {
 
                       {linkedTasks.length === 0 ? (
                         <article className="project-task-empty">
-                          <span className="panel-kicker">연결된 task 없음</span>
+                          <span className="panel-kicker">연결된 작업 없음</span>
                           <strong>아직 이 프로젝트에 묶인 작업이 없습니다</strong>
-                          <p>오른쪽 task 연결 명령에서 필요한 작업을 이 허브로 묶으면 여기에서 바로 검색하고 이어갈 수 있습니다.</p>
+                          <p>오른쪽 작업 연결 명령에서 필요한 작업을 이 허브로 묶으면 여기에서 바로 검색하고 이어갈 수 있습니다.</p>
                         </article>
                       ) : filteredLinkedTasks.length > 0 ? (
                         <div className="project-detail-task-list">
@@ -914,7 +1000,7 @@ export function ProjectsRoute() {
                               <strong>{task.title}</strong>
                               <p>
                                 {task.summary ??
-                                  '아직 저장된 대화 요약이 없습니다. 작업대나 채팅에서 이 task를 열어 맥락을 이어갈 수 있습니다.'}
+                                  '아직 저장된 대화 요약이 없습니다. 작업대나 채팅에서 이 작업을 열어 맥락을 이어갈 수 있습니다.'}
                               </p>
                               <div className="project-detail-task-meta">
                                 <span>시작 화면 {getProjectTaskSourceLabel(task.sourceScreen)}</span>
@@ -948,7 +1034,7 @@ export function ProjectsRoute() {
                       ) : (
                         <article className="project-task-empty">
                           <span className="panel-kicker">검색 결과 없음</span>
-                          <strong>이 검색어와 맞는 task가 아직 없습니다</strong>
+                          <strong>이 검색어와 맞는 작업이 아직 없습니다</strong>
                           <p>다른 키워드로 다시 찾거나 오른쪽 인박스에서 새 작업을 이 프로젝트에 연결해 보세요.</p>
                         </article>
                       )}
@@ -1088,7 +1174,7 @@ export function ProjectsRoute() {
                           <article className="project-task-empty">
                             <span className="panel-kicker">맥락 없음</span>
                             <strong>아직 최근 대화 맥락이 충분히 쌓이지 않았습니다</strong>
-                            <p>이 프로젝트에 task를 연결하고 대화를 한 번이라도 이어가면 최근 의도와 흐름이 여기로 모입니다.</p>
+                            <p>이 프로젝트에 작업을 연결하고 대화를 한 번이라도 이어가면 최근 의도와 흐름이 여기로 모입니다.</p>
                           </article>
                         )}
                       </section>
@@ -1102,9 +1188,9 @@ export function ProjectsRoute() {
           <aside className="panel project-task-command-stage">
             <div className="panel-header panel-header-stack">
               <div>
-                <span className="panel-kicker">task 연결 명령</span>
+                <span className="panel-kicker">작업 연결 명령</span>
                 <h3>허브에 넣을 작업과 뺄 작업을 여기서 정리합니다</h3>
-                <p>한 task는 하나의 프로젝트에만 연결됩니다. 필요하면 다른 허브에서 이쪽으로 바로 옮길 수 있습니다.</p>
+                <p>한 작업은 하나의 프로젝트에만 연결됩니다. 필요하면 다른 허브에서 이쪽으로 바로 옮길 수 있습니다.</p>
               </div>
               <span className="badge badge-success">
                 {selectedProjectSummary ? `${selectedProjectSummary.name} 기준` : '프로젝트 선택 전'}
@@ -1115,7 +1201,7 @@ export function ProjectsRoute() {
               <article className="project-state-card">
                 <span className="panel-kicker">저장 후 연결</span>
                 <strong>먼저 프로젝트 허브를 저장하세요</strong>
-                <p>프로젝트가 만들어진 뒤부터 기존 채팅 task를 이 허브에 연결하거나 다시 분리할 수 있습니다.</p>
+                <p>프로젝트가 만들어진 뒤부터 기존 채팅 작업을 이 허브에 연결하거나 다시 분리할 수 있습니다.</p>
               </article>
             ) : null}
 
@@ -1123,7 +1209,7 @@ export function ProjectsRoute() {
               <article className="project-state-card">
                 <span className="panel-kicker">허브 선택 필요</span>
                 <strong>어느 프로젝트에 연결할지 먼저 고르세요</strong>
-                <p>왼쪽 목록에서 허브를 선택하면 연결된 task와 최근 task 명령이 함께 열립니다.</p>
+                <p>왼쪽 목록에서 허브를 선택하면 연결된 작업과 최근 작업 명령이 함께 열립니다.</p>
               </article>
             ) : null}
 
@@ -1131,7 +1217,7 @@ export function ProjectsRoute() {
               <div className="project-task-command-layout">
                 <section className="project-task-section">
                   <div className="project-task-section-header">
-                    <strong>현재 연결된 task</strong>
+                    <strong>현재 연결된 작업</strong>
                     <span>{linkedTasks.length}개</span>
                   </div>
                   {linkedTasks.length > 0 ? (
@@ -1171,15 +1257,15 @@ export function ProjectsRoute() {
                   ) : (
                     <article className="project-task-empty">
                       <span className="panel-kicker">아직 없음</span>
-                      <strong>이 허브에 연결된 task가 없습니다</strong>
-                      <p>아래 최근 task 목록에서 필요한 작업을 골라 이 허브로 바로 연결해 보세요.</p>
+                      <strong>이 허브에 연결된 작업이 없습니다</strong>
+                      <p>아래 최근 작업 목록에서 필요한 작업을 골라 이 허브로 바로 연결해 보세요.</p>
                     </article>
                   )}
                 </section>
 
                 <section className="project-task-section">
                   <div className="project-task-section-header">
-                    <strong>최근 task 인박스</strong>
+                    <strong>최근 작업 인박스</strong>
                     <span>{recentTasks.length}개</span>
                   </div>
                   {recentTasks.length > 0 ? (
@@ -1204,7 +1290,8 @@ export function ProjectsRoute() {
                           </div>
                           <strong>{task.title}</strong>
                           <p>
-                            현재 위치 {task.projectName ?? '개인 작업'} · 시작 화면 {task.sourceScreen}
+                            현재 위치 {task.projectName ?? '개인 작업'} · 시작 화면{' '}
+                            {getProjectTaskSourceLabel(task.sourceScreen)}
                           </p>
                           <div className="project-task-command-actions">
                             <button
@@ -1227,9 +1314,9 @@ export function ProjectsRoute() {
                     })
                   ) : (
                     <article className="project-task-empty">
-                      <span className="panel-kicker">최근 task 없음</span>
+                      <span className="panel-kicker">최근 작업 없음</span>
                       <strong>연결할 최근 작업이 아직 없습니다</strong>
-                      <p>채팅이나 작업대에서 새 task를 시작하면 이 목록으로 바로 들어옵니다.</p>
+                      <p>채팅이나 작업대에서 새 작업을 시작하면 이 목록으로 바로 들어옵니다.</p>
                     </article>
                   )}
                 </section>
@@ -1266,7 +1353,7 @@ export function ProjectsRoute() {
               <article className="board-overview-card">
                 <span className="panel-kicker">프로젝트 허브와 관계</span>
                 <strong>프로젝트 묶음 안에서 흐름만 보조로 관리합니다</strong>
-                <p>프로젝트 허브에서 작업 맥락을 정리하고, 여기서는 같은 task를 단계별로만 이동합니다.</p>
+                <p>프로젝트 허브에서 작업 맥락을 정리하고, 여기서는 같은 작업을 단계별로만 이동합니다.</p>
               </article>
 
               <article className="board-overview-card">
@@ -1304,15 +1391,33 @@ export function ProjectsRoute() {
               <article className="panel board-placeholder">
                 <span className="panel-kicker">동기화 오류</span>
                 <strong>흐름 보드를 불러오지 못했습니다</strong>
-                <p>{boardQuery.error?.message ?? '데스크탑 브리지 응답을 다시 확인해 주세요.'}</p>
+                <p>{boardErrorCopy.primary}</p>
+                <QueryDiagnostic diagnostic={boardErrorCopy.diagnostic} />
                 <button
                   type="button"
                   className="soft-button"
                   onClick={() => {
-                    void queryCache.fetchQuery(boardDescriptor);
+                    void refreshBoard();
                   }}
                 >
                   다시 불러오기
+                </button>
+              </article>
+            ) : null}
+
+            {boardSurfaceState.showSyncWarningState ? (
+              <article className="project-inline-feedback project-inline-feedback-error">
+                <strong>마지막으로 동기화된 칸반 상태를 보여주고 있습니다</strong>
+                <p>{boardSyncWarningCopy.primary}</p>
+                <QueryDiagnostic diagnostic={boardSyncWarningCopy.diagnostic} />
+                <button
+                  type="button"
+                  className="soft-button"
+                  onClick={() => {
+                    void refreshBoard();
+                  }}
+                >
+                  칸반 다시 동기화
                 </button>
               </article>
             ) : null}

@@ -14,6 +14,7 @@ type BoardSurfaceQueryStatus = 'idle' | 'loading' | 'success' | 'error';
 type ProjectHubSurfaceState = {
   showLoadingState: boolean;
   showErrorState: boolean;
+  showSyncWarningState: boolean;
   showEmptyState: boolean;
   showInteractiveContent: boolean;
   projects: ProjectListResult['projects'];
@@ -27,6 +28,7 @@ type ProjectHubSurfaceState = {
 type BoardSurfaceState = {
   showLoadingState: boolean;
   showErrorState: boolean;
+  showSyncWarningState: boolean;
   showInteractiveContent: boolean;
   columns: BoardColumnsResult['columns'];
   totalTaskCount: number;
@@ -34,6 +36,13 @@ type BoardSurfaceState = {
   completedTaskCount: number;
   emptyColumnCount: number;
   previewMode: boolean;
+};
+
+type ProjectDetailSurfaceState = {
+  showLoadingState: boolean;
+  showErrorState: boolean;
+  showSyncWarningState: boolean;
+  showInteractiveContent: boolean;
 };
 
 const boardStatusLabels: Record<TaskStatus, string> = {
@@ -283,6 +292,7 @@ export function getProjectHubSurfaceState(options: {
       return {
         showLoadingState: true,
         showErrorState: false,
+        showSyncWarningState: false,
         showEmptyState: false,
         showInteractiveContent: false,
         projects: [],
@@ -298,6 +308,7 @@ export function getProjectHubSurfaceState(options: {
       return {
         showLoadingState: false,
         showErrorState: true,
+        showSyncWarningState: false,
         showEmptyState: false,
         showInteractiveContent: false,
         projects: [],
@@ -317,6 +328,7 @@ export function getProjectHubSurfaceState(options: {
   return {
     showLoadingState: false,
     showErrorState: false,
+    showSyncWarningState: options.desktopAvailable && options.queryStatus === 'error' && options.projectList !== null,
     showEmptyState: projectList.projects.length === 0,
     showInteractiveContent: true,
     projects: projectList.projects,
@@ -460,6 +472,7 @@ export function getBoardSurfaceState(options: {
       return {
         showLoadingState: true,
         showErrorState: false,
+        showSyncWarningState: false,
         showInteractiveContent: false,
         columns: createEmptyBoardColumns(),
         totalTaskCount: 0,
@@ -474,6 +487,7 @@ export function getBoardSurfaceState(options: {
       return {
         showLoadingState: false,
         showErrorState: true,
+        showSyncWarningState: false,
         showInteractiveContent: false,
         columns: createEmptyBoardColumns(),
         totalTaskCount: 0,
@@ -493,6 +507,7 @@ export function getBoardSurfaceState(options: {
   return {
     showLoadingState: false,
     showErrorState: false,
+    showSyncWarningState: options.desktopAvailable && options.queryStatus === 'error' && options.boardColumns !== null,
     showInteractiveContent: true,
     columns,
     totalTaskCount,
@@ -500,6 +515,47 @@ export function getBoardSurfaceState(options: {
     completedTaskCount,
     emptyColumnCount,
     previewMode: !options.desktopAvailable,
+  };
+}
+
+export function getProjectDetailSurfaceState(options: {
+  desktopAvailable: boolean;
+  queryStatus: ProjectSurfaceQueryStatus;
+  projectDetail: ProjectDetailResult | null;
+  hasSelectedProject: boolean;
+}): ProjectDetailSurfaceState {
+  if (!options.desktopAvailable || !options.hasSelectedProject) {
+    return {
+      showLoadingState: false,
+      showErrorState: false,
+      showSyncWarningState: false,
+      showInteractiveContent: options.projectDetail !== null,
+    };
+  }
+
+  if ((options.queryStatus === 'idle' || options.queryStatus === 'loading') && options.projectDetail === null) {
+    return {
+      showLoadingState: true,
+      showErrorState: false,
+      showSyncWarningState: false,
+      showInteractiveContent: false,
+    };
+  }
+
+  if (options.queryStatus === 'error' && options.projectDetail === null) {
+    return {
+      showLoadingState: false,
+      showErrorState: true,
+      showSyncWarningState: false,
+      showInteractiveContent: false,
+    };
+  }
+
+  return {
+    showLoadingState: false,
+    showErrorState: false,
+    showSyncWarningState: options.queryStatus === 'error' && options.projectDetail !== null,
+    showInteractiveContent: options.projectDetail !== null,
   };
 }
 
