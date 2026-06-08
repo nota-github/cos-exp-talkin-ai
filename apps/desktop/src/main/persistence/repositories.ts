@@ -133,6 +133,9 @@ type ProjectTaskRow = {
   task_id: string;
   title: string;
   status: TaskRecord['status'];
+  source_screen: TaskRecord['sourceScreen'];
+  summary: string | null;
+  conversation_id: string | null;
   last_activity_at: string;
 };
 
@@ -407,6 +410,9 @@ function mapProjectTaskRow(row: ProjectTaskRow): ProjectTaskRecord {
     taskId: row.task_id,
     title: row.title,
     status: row.status,
+    sourceScreen: row.source_screen,
+    summary: row.summary,
+    conversationId: row.conversation_id,
     lastActivityAt: row.last_activity_at,
   };
 }
@@ -971,13 +977,28 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
 
         const taskRows = await connection.query<ProjectTaskRow>(`
           SELECT
-            id AS task_id,
-            title,
-            status,
-            last_activity_at
-          FROM tasks
-          WHERE project_id = ${sqlValue(projectId)}
-          ORDER BY last_activity_at DESC, updated_at DESC;
+            t.id AS task_id,
+            t.title AS title,
+            t.status AS status,
+            t.source_screen AS source_screen,
+            t.last_activity_at AS last_activity_at,
+            (
+              SELECT c.summary
+              FROM conversations AS c
+              WHERE c.task_id = t.id
+              ORDER BY c.updated_at DESC, c.rowid DESC
+              LIMIT 1
+            ) AS summary,
+            (
+              SELECT c.id
+              FROM conversations AS c
+              WHERE c.task_id = t.id
+              ORDER BY c.updated_at DESC, c.rowid DESC
+              LIMIT 1
+            ) AS conversation_id
+          FROM tasks AS t
+          WHERE t.project_id = ${sqlValue(projectId)}
+          ORDER BY t.last_activity_at DESC, t.updated_at DESC;
         `);
 
         return {

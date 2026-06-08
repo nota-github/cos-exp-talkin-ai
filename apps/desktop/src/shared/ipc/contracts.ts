@@ -265,8 +265,28 @@ export type ProjectTaskSummary = {
   taskId: string;
   title: string;
   status: TaskStatus;
+  sourceScreen: 'chat' | 'workbench' | 'projects' | 'kanban';
+  summary: string | null;
+  conversationId: string | null;
   lastActivity: string;
   lastActivityAt: string;
+};
+
+export type ProjectFileSummary = {
+  fileId: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type ProjectActivityItem = {
+  activityId: string;
+  title: string;
+  summary: string;
+  timestampLabel: string;
+  timestampAt: string;
+  taskId: string | null;
+  conversationId: string | null;
 };
 
 export type ProjectDetailResult = {
@@ -275,8 +295,9 @@ export type ProjectDetailResult = {
   description: string;
   goal: string;
   updatedAt: string;
-  files: string[];
+  files: ProjectFileSummary[];
   tasks: ProjectTaskSummary[];
+  recentActivity: ProjectActivityItem[];
 };
 
 export type UsageDashboardQuery = {

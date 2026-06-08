@@ -4,6 +4,7 @@ import type {
   OpenInWorkbenchResult,
   ProjectDetailResult,
   ProjectListResult,
+  ProjectTaskSummary,
   TaskStatus,
 } from '../../shared/ipc/contracts';
 
@@ -41,6 +42,13 @@ const boardStatusLabels: Record<TaskStatus, string> = {
   ai_review: 'AI 검토',
   human_review: '사람 검토',
   completed: '완료',
+};
+
+const projectTaskSourceLabels: Record<ProjectTaskSummary['sourceScreen'], string> = {
+  chat: '채팅',
+  workbench: '작업대',
+  projects: '프로젝트',
+  kanban: '칸반',
 };
 
 export const previewProjectList: ProjectListResult = {
@@ -130,12 +138,28 @@ export const previewProjectDetails: Record<string, ProjectDetailResult> = {
     description: '파트너 제안서, 목차 정리, 수익 모델 검토를 한 묶음으로 관리',
     goal: '시장 진입 전략과 수익 모델 메시지를 하나의 흐름으로 묶기',
     updatedAt: '2026-06-08T05:04:00.000Z',
-    files: ['partner-brief.pdf', 'pricing-notes.docx'],
+    files: [
+      {
+        fileId: 'file-001',
+        displayName: 'partner-brief.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 3_941_122,
+      },
+      {
+        fileId: 'file-002',
+        displayName: 'pricing-notes.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        sizeBytes: 184_220,
+      },
+    ],
     tasks: [
       {
         taskId: 'preview-task-003',
         title: '파트너 제안서 목차 점검',
         status: 'ai_review',
+        sourceScreen: 'kanban',
+        summary: '시장 진입 전략이 먼저 보이도록 제안서 목차와 메시지 흐름을 조정합니다.',
+        conversationId: 'preview-conversation-003',
         lastActivity: '1시간 전',
         lastActivityAt: '2026-06-08T04:10:00.000Z',
       },
@@ -143,8 +167,31 @@ export const previewProjectDetails: Record<string, ProjectDetailResult> = {
         taskId: 'preview-task-004',
         title: '요금 정책 FAQ 초안 정리',
         status: 'completed',
+        sourceScreen: 'chat',
+        summary: '요금 정책 질문을 고객지원 톤으로 다시 묶고 자주 받는 반박 포인트를 정리합니다.',
+        conversationId: 'preview-conversation-004',
         lastActivity: '어제',
         lastActivityAt: '2026-06-07T14:00:00.000Z',
+      },
+    ],
+    recentActivity: [
+      {
+        activityId: 'task-preview-task-003',
+        title: '파트너 제안서 목차 점검',
+        summary: '시장 진입 전략이 먼저 보이도록 제안서 목차와 메시지 흐름을 조정합니다.',
+        timestampLabel: '1시간 전',
+        timestampAt: '2026-06-08T04:10:00.000Z',
+        taskId: 'preview-task-003',
+        conversationId: 'preview-conversation-003',
+      },
+      {
+        activityId: 'task-preview-task-004',
+        title: '요금 정책 FAQ 초안 정리',
+        summary: '요금 정책 질문을 고객지원 톤으로 다시 묶고 자주 받는 반박 포인트를 정리합니다.',
+        timestampLabel: '어제',
+        timestampAt: '2026-06-07T14:00:00.000Z',
+        taskId: 'preview-task-004',
+        conversationId: 'preview-conversation-004',
       },
     ],
   },
@@ -154,14 +201,35 @@ export const previewProjectDetails: Record<string, ProjectDetailResult> = {
     description: '긴 PDF 요약, 경쟁사 메모, 후속 질문을 정리하는 리서치 허브',
     goal: '핵심 문서를 1페이지 한국어 인사이트로 압축',
     updatedAt: '2026-06-08T04:52:00.000Z',
-    files: ['research-pack.pdf'],
+    files: [
+      {
+        fileId: 'file-003',
+        displayName: 'research-pack.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 8_412_100,
+      },
+    ],
     tasks: [
       {
         taskId: 'preview-task-002',
         title: '긴 PDF 핵심 7개 항목으로 요약',
         status: 'in_progress',
+        sourceScreen: 'workbench',
+        summary: '긴 PDF에서 핵심 주장과 수치만 추려 7개 한국어 인사이트로 압축합니다.',
+        conversationId: 'preview-conversation-002',
         lastActivity: '18분 전',
         lastActivityAt: '2026-06-08T04:52:00.000Z',
+      },
+    ],
+    recentActivity: [
+      {
+        activityId: 'task-preview-task-002',
+        title: '긴 PDF 핵심 7개 항목으로 요약',
+        summary: '긴 PDF에서 핵심 주장과 수치만 추려 7개 한국어 인사이트로 압축합니다.',
+        timestampLabel: '18분 전',
+        timestampAt: '2026-06-08T04:52:00.000Z',
+        taskId: 'preview-task-002',
+        conversationId: 'preview-conversation-002',
       },
     ],
   },
@@ -177,12 +245,30 @@ export const previewProjectDetails: Record<string, ProjectDetailResult> = {
         taskId: 'preview-task-001',
         title: '운영 공지 카피 다듬기',
         status: 'planning',
+        sourceScreen: 'chat',
+        summary: '사용자 공지 문장을 더 짧고 분명하게 다듬되, 과한 사과 톤은 줄입니다.',
+        conversationId: 'preview-conversation-001',
         lastActivity: '방금',
         lastActivityAt: '2026-06-08T05:10:00.000Z',
       },
     ],
+    recentActivity: [
+      {
+        activityId: 'task-preview-task-001',
+        title: '운영 공지 카피 다듬기',
+        summary: '사용자 공지 문장을 더 짧고 분명하게 다듬되, 과한 사과 톤은 줄입니다.',
+        timestampLabel: '방금',
+        timestampAt: '2026-06-08T05:10:00.000Z',
+        taskId: 'preview-task-001',
+        conversationId: 'preview-conversation-001',
+      },
+    ],
   },
 };
+
+function normalizeProjectTaskSearch(query: string) {
+  return query.trim().toLowerCase();
+}
 
 export function getProjectHubSurfaceState(options: {
   desktopAvailable: boolean;
@@ -328,6 +414,39 @@ export function getBoardStatusLabel(status: TaskStatus) {
   return boardStatusLabels[status];
 }
 
+export function getProjectTaskSourceLabel(sourceScreen: ProjectTaskSummary['sourceScreen']) {
+  return projectTaskSourceLabels[sourceScreen];
+}
+
+export function filterProjectTasks(tasks: ProjectTaskSummary[], query: string) {
+  const normalizedQuery = normalizeProjectTaskSearch(query);
+
+  if (!normalizedQuery) {
+    return tasks;
+  }
+
+  return tasks.filter((task) =>
+    [
+      task.title,
+      task.summary ?? '',
+      getBoardStatusLabel(task.status),
+      getProjectTaskSourceLabel(task.sourceScreen),
+    ].some((value) => value.toLowerCase().includes(normalizedQuery)),
+  );
+}
+
+export function formatProjectFileSize(sizeBytes: number) {
+  if (sizeBytes >= 1_000_000) {
+    return `${(sizeBytes / 1_000_000).toFixed(1)} MB`;
+  }
+
+  if (sizeBytes >= 1_000) {
+    return `${Math.round(sizeBytes / 1_000)} KB`;
+  }
+
+  return `${sizeBytes} B`;
+}
+
 export function getBoardSurfaceState(options: {
   desktopAvailable: boolean;
   queryStatus: BoardSurfaceQueryStatus;
@@ -401,6 +520,15 @@ export async function openBoardTaskInWorkbench(options: {
   return true;
 }
 
+export async function openProjectTaskInWorkbench(options: {
+  desktopAvailable: boolean;
+  taskId: string | null;
+  navigate: (path: string) => void;
+  openInWorkbench: (request: OpenInWorkbenchCommand) => Promise<OpenInWorkbenchResult>;
+}) {
+  return openBoardTaskInWorkbench(options);
+}
+
 export function openBoardTaskInChat(options: {
   conversationId: string | null;
   navigate: (path: string) => void;
@@ -411,4 +539,11 @@ export function openBoardTaskInChat(options: {
 
   options.navigate(`/?conversationId=${encodeURIComponent(options.conversationId)}`);
   return true;
+}
+
+export function openProjectTaskInChat(options: {
+  conversationId: string | null;
+  navigate: (path: string) => void;
+}) {
+  return openBoardTaskInChat(options);
 }

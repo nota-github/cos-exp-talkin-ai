@@ -13,11 +13,15 @@ import {
 import { openSqliteDatabase } from '../src/main/persistence/database.ts';
 import { createPersistentProjectService } from '../src/main/projects/index.ts';
 import {
+  filterProjectTasks,
   getBoardSurfaceState,
   getProjectHubSurfaceState,
   openBoardTaskInChat,
   openBoardTaskInWorkbench,
+  openProjectTaskInChat,
+  openProjectTaskInWorkbench,
   previewBoardColumns,
+  previewProjectDetails,
   previewProjectList,
 } from '../src/renderer/routes/projects-surface.ts';
 import { createPersistentWorkbenchService } from '../src/main/workbench/index.ts';
@@ -128,6 +132,32 @@ async function seedProject(dbPath: string, input: {
       goal: input.goal,
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
+    });
+  } finally {
+    await persistence.close();
+  }
+}
+
+async function seedProjectFile(dbPath: string, input: {
+  id: string;
+  projectId: string;
+  displayName: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+}) {
+  const handle = await openSqliteDatabase(dbPath);
+  const persistence = createChatRunPersistence(handle.connection);
+
+  try {
+    await migrateDesktopSchema(handle.connection);
+    await persistence.fileAssets.create({
+      id: input.id,
+      projectId: input.projectId,
+      displayName: input.displayName,
+      storagePath: input.storagePath,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
     });
   } finally {
     await persistence.close();
@@ -632,4 +662,163 @@ test('story-5.6:VAL-3 and story-5.6:AC-5 project hub surface distinguishes loadi
   assert.match(projectsStylesSource, /\.project-hub-layout\s*\{/);
   assert.match(projectsStylesSource, /\.project-list-card\s*\{/);
   assert.match(projectsStylesSource, /\.project-task-command-card\s*\{/);
+});
+
+test('story-5.7:VAL-1, story-5.7:AC-1, and story-5.7:AC-2 project detail returns rich task, file, and activity data and supports in-project task search', async () => {
+  const temp = createTempDatabase();
+
+  try {
+    await seedProject(temp.dbPath, {
+      id: 'project-001',
+      name: '사업계획서',
+      description: '상세 허브와 검색 검증용 프로젝트',
+      goal: 'task, 파일, 최근 맥락이 함께 모이는지 확인',
+      createdAt: '2026-06-08T05:00:00.000Z',
+      updatedAt: '2026-06-08T05:00:00.000Z',
+    });
+
+    const idFactory = createDeterministicIdFactory();
+    const submitService = createDesktopIpcService({
+      chatHistoryService: createPersistentChatHistoryService({
+        dbPath: temp.dbPath,
+        now: createSequenceNow(
+          '2026-06-08T05:01:00.000Z',
+          '2026-06-08T05:02:00.000Z',
+          '2026-06-08T05:03:00.000Z',
+        ),
+        createId: idFactory,
+      }),
+      projectService: createPersistentProjectService({
+        dbPath: temp.dbPath,
+        createId: idFactory,
+        now: createSequenceNow('2026-06-08T05:04:00.000Z'),
+      }),
+    });
+
+    await submitService.commands.submitPrompt({
+      promptKo: '시장 진입 전략이 먼저 보이도록 사업계획서 초안을 정리해줘.',
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'balanced',
+      projectId: 'project-001',
+    });
+    await submitService.commands.submitPrompt({
+      promptKo: '긴 PDF 핵심 주장만 뽑아 한국어 인사이트 7개로 요약해줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+      projectId: 'project-001',
+    });
+    await submitService.commands.submitPrompt({
+      promptKo: '브랜드 카피 후보를 더 짧고 강하게 다듬어줘.',
+      selectedModel: 'gemini-1.5-pro',
+      optimizationMode: 'savings',
+      projectId: 'project-001',
+    });
+
+    await seedProjectFile(temp.dbPath, {
+      id: 'file-001',
+      projectId: 'project-001',
+      displayName: 'partner-brief.pdf',
+      storagePath: '/tmp/partner-brief.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 4096,
+    });
+
+    const detailService = createDesktopIpcService({
+      projectService: createPersistentProjectService({
+        dbPath: temp.dbPath,
+        createId: idFactory,
+        now: createSequenceNow('2026-06-08T05:06:00.000Z'),
+      }),
+    });
+
+    const detail = await detailService.queries.getProjectDetail({
+      projectId: 'project-001',
+    });
+
+    assert.equal(detail.files.length, 1);
+    assert.deepEqual(detail.files[0], {
+      fileId: 'file-001',
+      displayName: 'partner-brief.pdf',
+      mimeType: 'application/pdf',
+      sizeBytes: 4096,
+    });
+    assert.equal(detail.tasks.length, 3);
+    assert.equal(detail.tasks[0]?.taskId, 'task-003');
+    assert.equal(detail.tasks[0]?.conversationId, 'conversation-003');
+    assert.equal(detail.tasks[0]?.sourceScreen, 'chat');
+    assert.match(detail.tasks[0]?.summary ?? '', /브랜드 카피/);
+    assert.equal(detail.recentActivity.length, 3);
+    assert.equal(detail.recentActivity[0]?.taskId, 'task-003');
+    assert.match(detail.recentActivity[0]?.summary ?? '', /브랜드 카피/);
+
+    assert.deepEqual(
+      filterProjectTasks(detail.tasks, '시장 진입').map((task) => task.taskId),
+      ['task-001'],
+    );
+    assert.deepEqual(
+      filterProjectTasks(detail.tasks, '한국어 인사이트').map((task) => task.taskId),
+      ['task-002'],
+    );
+    assert.equal(filterProjectTasks(detail.tasks, '없는 검색어').length, 0);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-5.7:VAL-2 and story-5.7:AC-3 project detail task actions can open the same task in workbench or chat', async () => {
+  let workbenchPath = '';
+  let observedWorkbenchTaskId: string | null = null;
+
+  const openedWorkbench = await openProjectTaskInWorkbench({
+    desktopAvailable: true,
+    taskId: 'task-301',
+    navigate: (path) => {
+      workbenchPath = path;
+    },
+    openInWorkbench: async (request) => {
+      observedWorkbenchTaskId = request.taskId;
+
+      return {
+        layoutId: 'layout-primary',
+        taskId: request.taskId,
+        panelSlot: 'north-west',
+      };
+    },
+  });
+
+  let chatPath = '';
+  const openedChat = openProjectTaskInChat({
+    conversationId: 'conversation-301',
+    navigate: (path) => {
+      chatPath = path;
+    },
+  });
+
+  assert.equal(openedWorkbench, true);
+  assert.equal(observedWorkbenchTaskId, 'task-301');
+  assert.equal(workbenchPath, '/workbench');
+  assert.equal(openedChat, true);
+  assert.equal(chatPath, '/?conversationId=conversation-301');
+  assert.match(projectsRouteSource, /작업대에서 이어가기/);
+  assert.match(projectsRouteSource, /연결된 task 검색/);
+  assert.match(projectsRouteSource, /최근 대화 맥락/);
+});
+
+test('story-5.7:VAL-3, story-5.7:AC-4, story-5.7:AC-5, and story-5.7:AC-6 project detail hub distinguishes file-empty and file-present context sections', () => {
+  const populatedDetail = previewProjectDetails['project-001'];
+  const emptyFileDetail = previewProjectDetails['project-003'];
+
+  assert.equal(populatedDetail.files.length, 2);
+  assert.equal(populatedDetail.recentActivity.length, 2);
+  assert.equal(emptyFileDetail.files.length, 0);
+  assert.equal(emptyFileDetail.tasks[0]?.conversationId, 'preview-conversation-001');
+  assert.equal(emptyFileDetail.recentActivity[0]?.taskId, 'preview-task-001');
+  assert.match(projectsRouteSource, /프로젝트 상세 허브/);
+  assert.match(projectsRouteSource, /task, 파일, 대화 흐름을 함께 봅니다/);
+  assert.match(projectsRouteSource, /첫 참고 파일이 아직 없습니다/);
+  assert.match(projectsRouteSource, /방금 이어진 의도와 후속 지시/);
+  assert.match(projectsStylesSource, /\.project-detail-grid\s*\{/);
+  assert.match(projectsStylesSource, /\.project-detail-task-card\s*\{/);
+  assert.match(projectsStylesSource, /\.project-file-empty\s*\{/);
+  assert.match(projectsStylesSource, /\.project-context-card\s*\{/);
 });
