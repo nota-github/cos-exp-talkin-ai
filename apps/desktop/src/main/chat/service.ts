@@ -6,6 +6,7 @@ import type {
   ChatFeedResult,
   ChatFeedRunFailureSummary,
   ChatFeedRunSummary,
+  ChatFeedRunUsageSummary,
   CloudModelId,
   OptimizationMode,
   RetryRunCommand,
@@ -65,6 +66,7 @@ type MessageRow = {
 
 type RunRow = {
   id: string;
+  task_id: string;
   message_id: string;
   status: ChatFeedRunSummary['status'];
   model: CloudModelId;
@@ -75,6 +77,14 @@ type RunRow = {
 type RunStageRow = {
   stage: Exclude<ChatFeedRunSummary['stage'], null>;
   details_json: string | null;
+};
+
+type UsageRow = {
+  baseline_input_tokens: number;
+  optimized_input_tokens: number;
+  output_tokens: number;
+  latency_ms: number;
+  is_estimated: number;
 };
 
 export interface ChatHistoryService {
@@ -152,6 +162,7 @@ function createEmptyChatFeed(): ChatFeedResult {
     recommendedPrompts: [...recommendedPrompts],
     items: [],
     messages: [],
+    runs: [],
     activeRun: null,
   };
 }
@@ -204,6 +215,30 @@ function buildFailureSummary(
     retryable:
       readBoolean(details?.retryable) ??
       readBoolean(details?.recoverable),
+  };
+}
+
+function computeSavingsRate(baselineTokens: number, optimizedTokens: number) {
+  if (baselineTokens <= 0) {
+    return 0;
+  }
+
+  const rawRate = Math.round((1 - optimizedTokens / baselineTokens) * 100);
+  return Math.max(0, rawRate);
+}
+
+function mapRunUsageSummary(row: UsageRow | undefined): ChatFeedRunUsageSummary | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    baselineInputTokens: row.baseline_input_tokens,
+    optimizedInputTokens: row.optimized_input_tokens,
+    outputTokens: row.output_tokens,
+    latencyMs: row.latency_ms,
+    savingsRate: computeSavingsRate(row.baseline_input_tokens, row.optimized_input_tokens),
+    isEstimated: row.is_estimated === 1,
   };
 }
 
@@ -272,13 +307,14 @@ async function listConversationMessages(
   `);
 }
 
-async function getLatestRun(
+async function listConversationRuns(
   connection: SqliteConnection,
   conversationId: string,
-): Promise<ChatFeedRunSummary | null> {
+): Promise<ChatFeedRunSummary[]> {
   const runRows = await connection.query<RunRow>(`
     SELECT
       id,
+      task_id,
       message_id,
       status,
       model,
@@ -286,36 +322,47 @@ async function getLatestRun(
       error_code
     FROM run_records
     WHERE conversation_id = ${sqlValue(conversationId)}
-    ORDER BY started_at DESC
-    LIMIT 1;
+    ORDER BY started_at ASC, rowid ASC;
   `);
-  const run = runRows[0];
 
-  if (!run) {
-    return null;
+  const summaries: ChatFeedRunSummary[] = [];
+
+  for (const run of runRows) {
+    const [latestStage] = await connection.query<RunStageRow>(`
+      SELECT
+        stage,
+        details_json
+      FROM run_stages
+      WHERE run_id = ${sqlValue(run.id)}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1;
+    `);
+    const [usageRow] = await connection.query<UsageRow>(`
+      SELECT
+        baseline_input_tokens,
+        optimized_input_tokens,
+        output_tokens,
+        latency_ms,
+        is_estimated
+      FROM usage_records
+      WHERE run_id = ${sqlValue(run.id)}
+      LIMIT 1;
+    `);
+
+    summaries.push({
+      runId: run.id,
+      sourceMessageId: run.message_id,
+      status: run.status,
+      stage: latestStage?.stage ?? null,
+      model: run.model,
+      mode: run.mode,
+      errorCode: run.error_code,
+      failure: buildFailureSummary(run, latestStage),
+      usage: mapRunUsageSummary(usageRow),
+    });
   }
 
-  const stageRows = await connection.query<RunStageRow>(`
-    SELECT
-      stage,
-      details_json
-    FROM run_stages
-    WHERE run_id = ${sqlValue(run.id)}
-    ORDER BY started_at DESC
-    LIMIT 1;
-  `);
-  const latestStage = stageRows[0];
-
-  return {
-    runId: run.id,
-    sourceMessageId: run.message_id,
-    status: run.status,
-    stage: latestStage?.stage ?? null,
-    model: run.model,
-    mode: run.mode,
-    errorCode: run.error_code,
-    failure: buildFailureSummary(run, latestStage),
-  };
+  return summaries;
 }
 
 function mapFeedItems(rows: TaskFeedRow[]): ChatFeedItem[] {
@@ -550,7 +597,8 @@ export function createPersistentChatHistoryService(
         }
 
         const messageRows = await listConversationMessages(connection, activeTaskRow.conversation_id);
-        const activeRun = await getLatestRun(connection, activeTaskRow.conversation_id);
+        const runs = await listConversationRuns(connection, activeTaskRow.conversation_id);
+        const activeRun = runs[runs.length - 1] ?? null;
 
         return {
           activeConversationId: activeTaskRow.conversation_id,
@@ -559,6 +607,7 @@ export function createPersistentChatHistoryService(
           recommendedPrompts: [...recommendedPrompts],
           items,
           messages: mapFeedMessages(messageRows),
+          runs,
           activeRun,
         };
       });

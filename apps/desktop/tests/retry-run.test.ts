@@ -235,6 +235,12 @@ test('story-3.5:VAL-3, story-3.5:AC-3, and story-3.5:AC-4 retryRun creates a new
 
     assert.equal(retryResult.acceptedStatus, 'queued');
     assert.notEqual(retryResult.runId, initialSubmit.runId);
+    assert.deepEqual(
+      failedRetryFeed.runs.map((run) => run.status),
+      ['completed', 'failed'],
+    );
+    assert.ok((failedRetryFeed.runs[0]?.usage?.savingsRate ?? 0) >= 0);
+    assert.equal(failedRetryFeed.runs[1]?.usage, null);
     assert.equal(completedFeed.messages[0]?.contentKo, messages[0]?.content_ko);
     assert.equal(messages.length, 2);
     assert.equal(messages[0]?.role, 'user');

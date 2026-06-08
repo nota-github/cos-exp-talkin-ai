@@ -327,6 +327,15 @@ test('story-3.4:VAL-1, story-3.4:AC-1, and story-3.4:AC-4 restore a structured E
 
     assert.equal(completedFeed.activeRun?.status, 'completed');
     assert.equal(completedFeed.activeRun?.stage, 'completed');
+    assert.equal(completedFeed.runs.length, 1);
+    assert.deepEqual(completedFeed.runs[0]?.usage, {
+      baselineInputTokens: usageRecord?.baseline_input_tokens ?? 0,
+      optimizedInputTokens: 124,
+      outputTokens: 96,
+      latencyMs: 840,
+      savingsRate: 0,
+      isEstimated: false,
+    });
     assert.equal(restoreCalls.length, 1);
     assert.match(restoreCalls[0]?.cloudEnglishResponse ?? '', /\| Budget \| 42 \|/);
     assert.deepEqual(
@@ -458,6 +467,9 @@ test('story-4.1:VAL-2 and story-4.1:AC-3 persist estimate-marked ledger rows whe
     const usageRecord = await readUsageRecord(temp.dbPath, submitResult.runId);
 
     assert.equal(completedFeed.activeRun?.status, 'completed');
+    assert.equal(completedFeed.runs[0]?.usage?.isEstimated, true);
+    assert.equal(completedFeed.runs[0]?.usage?.latencyMs, 275);
+    assert.equal(completedFeed.runs[0]?.usage?.savingsRate, completedFeed.activeRun?.usage?.savingsRate);
     assert.ok(usageRecord);
     assert.equal(usageRecord?.is_estimated, 1);
     assert.equal(usageRecord?.optimized_input_tokens, estimateTokenCount(optimizedEnglish));

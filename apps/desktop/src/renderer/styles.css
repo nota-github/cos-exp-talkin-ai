@@ -552,6 +552,49 @@ button {
   color: #0d7c67;
 }
 
+.response-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.response-meta-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(18, 42, 74, 0.08);
+  background: rgba(18, 42, 74, 0.04);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.response-meta-item-savings {
+  border-color: rgba(13, 124, 103, 0.16);
+  background: rgba(55, 201, 171, 0.12);
+  color: #0d7c67;
+}
+
+.response-meta-action {
+  padding: 6px 2px;
+  color: var(--blue-deep);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.response-meta-action:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.response-meta-action:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .run-status-card {
   display: grid;
   gap: 14px;

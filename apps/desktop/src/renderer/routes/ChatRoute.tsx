@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CloudModelId, OptimizationMode } from '../../shared/ipc/contracts';
+import type {
+  ChatFeedRunSummary,
+  CloudModelId,
+  OptimizationMode,
+} from '../../shared/ipc/contracts';
 import {
   createDesktopQueryDescriptor,
   getDesktopQueryCache,
@@ -10,11 +14,13 @@ import { useDesktopQuery } from '../lib/ipc/query-hooks';
 import {
   chatStarterCards,
   chatSurfaceCopy,
+  continueTaskInWorkbench,
   createIdleChatSubmitState,
   createSubmittingChatSubmitState,
   createStarterDraftSelection,
-  getChatRunFeedback,
   getChatDraftPreview,
+  getChatResponseMetadata,
+  getChatRunFeedback,
   getRunFeedbackActionLabel,
   mergeVisibleConversationMessages,
   modelOptions,
@@ -41,8 +47,10 @@ type ChatInboxViewProps = {
   activeStarterId: ChatStarterCard['id'] | null;
   activeRunFeedback: ChatRunFeedback | null;
   activeTaskTitle: string | null;
+  canContinueInWorkbench: boolean;
   canSubmit: boolean;
   conversationMessages: PendingChatSubmission[];
+  conversationRuns: ChatFeedRunSummary[];
   inboxPreviews: ChatInboxPreview[];
   isRetryingRun: boolean;
   optimizationMode: OptimizationMode;
@@ -59,6 +67,7 @@ type ChatInboxViewProps = {
   textareaRef: RefObject<HTMLTextAreaElement>;
   onDraftChange: (value: string) => void;
   onOptimizationModeSelect: (mode: OptimizationMode) => void;
+  onContinueInWorkbench: () => void;
   onStarterSelect: (card: ChatStarterCard) => void;
   onModelSelect: (model: CloudModelId) => void;
   onRunAction: (actionId: ChatRunFeedbackActionId) => void;
@@ -69,8 +78,10 @@ export function ChatInboxView({
   activeStarterId,
   activeRunFeedback,
   activeTaskTitle,
+  canContinueInWorkbench,
   canSubmit,
   conversationMessages,
+  conversationRuns,
   inboxPreviews,
   isRetryingRun,
   optimizationMode,
@@ -87,6 +98,7 @@ export function ChatInboxView({
   textareaRef,
   onDraftChange,
   onOptimizationModeSelect,
+  onContinueInWorkbench,
   onStarterSelect,
   onModelSelect,
   onRunAction,
@@ -94,6 +106,7 @@ export function ChatInboxView({
 }: ChatInboxViewProps) {
   const hasInboxItems = inboxPreviews.length > 0;
   const latestConversationMessageId = conversationMessages[conversationMessages.length - 1]?.messageId ?? null;
+  const conversationRunsById = new Map(conversationRuns.map((run) => [run.runId, run]));
 
   return (
     <section className="screen screen-chat">
@@ -268,6 +281,43 @@ export function ChatInboxView({
                 {message.role === 'user' && message.messageId === latestConversationMessageId ? (
                   <span className="bubble-meta">{chatSurfaceCopy.queuedRunLabel}</span>
                 ) : null}
+                {message.role === 'assistant' ? (
+                  (() => {
+                    const messageRun = message.runId
+                      ? conversationRunsById.get(message.runId) ?? null
+                      : null;
+                    const responseMetadata = getChatResponseMetadata(messageRun);
+
+                    if (!responseMetadata) {
+                      return null;
+                    }
+
+                    return (
+                      <div className="response-meta-row">
+                        {responseMetadata.items.map((item) => (
+                          <span
+                            key={item.id}
+                            className={
+                              item.tone === 'savings'
+                                ? 'response-meta-item response-meta-item-savings'
+                                : 'response-meta-item'
+                            }
+                          >
+                            {item.label}
+                          </span>
+                        ))}
+                        <button
+                          type="button"
+                          className="response-meta-action"
+                          onClick={onContinueInWorkbench}
+                          disabled={!canContinueInWorkbench}
+                        >
+                          {responseMetadata.actionLabel}
+                        </button>
+                      </div>
+                    );
+                  })()
+                ) : null}
               </article>
             ))}
 
@@ -376,9 +426,10 @@ export function ChatRoute() {
 
   const inboxPreviews = chatFeedQuery.data?.items ?? [];
   const persistedMessages = chatFeedQuery.data?.messages ?? [];
+  const conversationRuns = chatFeedQuery.data?.runs ?? [];
   const activeRun = chatFeedQuery.data?.activeRun ?? null;
   const conversationMessages = mergeVisibleConversationMessages(persistedMessages, pendingSubmission);
-  const activeRunFeedback = getChatRunFeedback(activeRun);
+  const activeRunFeedback = activeRun?.status === 'completed' ? null : getChatRunFeedback(activeRun);
   const activeRunSourceMessage = resolveSourceMessageForRun(conversationMessages, activeRun);
   const pendingDraftPreview =
     submitState.status === 'submitting' && promptDraft.trim().length > 0 ? promptDraft : null;
@@ -525,13 +576,24 @@ export function ChatRoute() {
     }
   }
 
+  async function handleContinueInWorkbench() {
+    await continueTaskInWorkbench({
+      desktopAvailable: desktopClient.available,
+      navigate,
+      openInWorkbench: desktopClient.commands.openInWorkbench,
+      taskId: chatFeedQuery.data?.activeTaskId ?? null,
+    });
+  }
+
   return (
     <ChatInboxView
       activeStarterId={activeStarterId}
       activeRunFeedback={activeRunFeedback}
       activeTaskTitle={chatFeedQuery.data?.activeTaskTitle ?? null}
+      canContinueInWorkbench={desktopClient.available && (chatFeedQuery.data?.activeTaskId ?? null) !== null}
       canSubmit={canSubmit}
       conversationMessages={conversationMessages}
+      conversationRuns={conversationRuns}
       inboxPreviews={inboxPreviews}
       isRetryingRun={retryState.status === 'retrying'}
       optimizationMode={optimizationMode}
@@ -548,6 +610,9 @@ export function ChatRoute() {
       textareaRef={textareaRef}
       onDraftChange={handleDraftChange}
       onOptimizationModeSelect={setOptimizationMode}
+      onContinueInWorkbench={() => {
+        void handleContinueInWorkbench();
+      }}
       onStarterSelect={handleStarterSelect}
       onModelSelect={setSelectedModel}
       onRunAction={handleRunAction}

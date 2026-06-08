@@ -4,7 +4,9 @@ import test from 'node:test';
 import {
   chatStarterCards,
   chatSurfaceCopy,
+  continueTaskInWorkbench,
   createStarterDraftSelection,
+  getChatResponseMetadata,
   getChatRunFeedback,
   getChatDraftPreview,
   getRunFeedbackActionLabel,
@@ -261,4 +263,115 @@ test('story-3.5:AC-3 source exposes retry, settings, and same-prompt model-switc
   assert.match(chatRouteSource, /navigate\('\/settings'\)/);
   assert.match(chatRouteSource, /modelRetryPrefillMessage/);
   assert.match(chatStylesSource, /\.run-status-card\s*\{/);
+});
+
+test('story-4.2:VAL-1, story-4.2:AC-1, and story-4.2:AC-2 build compact completed-response metadata with exact vs estimated savings wording', () => {
+  const exactMetadata = getChatResponseMetadata({
+    runId: 'run-501',
+    sourceMessageId: 'msg-501',
+    status: 'completed',
+    stage: 'completed',
+    model: 'claude-sonnet-4',
+    mode: 'quality',
+    errorCode: null,
+    failure: null,
+    usage: {
+      baselineInputTokens: 120,
+      optimizedInputTokens: 74,
+      outputTokens: 98,
+      latencyMs: 840,
+      savingsRate: 38,
+      isEstimated: false,
+    },
+  });
+  const estimatedMetadata = getChatResponseMetadata({
+    runId: 'run-502',
+    sourceMessageId: 'msg-502',
+    status: 'completed',
+    stage: 'completed',
+    model: 'gpt-4.1',
+    mode: 'balanced',
+    errorCode: null,
+    failure: null,
+    usage: {
+      baselineInputTokens: 164,
+      optimizedInputTokens: 100,
+      outputTokens: 60,
+      latencyMs: 1_420,
+      savingsRate: 39,
+      isEstimated: true,
+    },
+  });
+
+  assert.deepEqual(exactMetadata?.items.map((item) => item.label), [
+    'Claude Sonnet',
+    '지연 840ms',
+    '38% 절감',
+  ]);
+  assert.equal(exactMetadata?.items[2]?.tone, 'savings');
+  assert.deepEqual(estimatedMetadata?.items.map((item) => item.label), [
+    'GPT-4.1',
+    '지연 1.4초',
+    '예상 절감 39%',
+  ]);
+  assert.equal(estimatedMetadata?.actionLabel, '작업대에서 계속하기');
+});
+
+test('story-4.2:AC-4 and story-4.2:VAL-1 keep stage or error feedback for non-completed runs instead of completed metadata', () => {
+  const failedRun = {
+    runId: 'run-503',
+    sourceMessageId: 'msg-503',
+    status: 'failed' as const,
+    stage: 'failed' as const,
+    model: 'gemini-1.5-pro',
+    mode: 'quality' as const,
+    errorCode: 'cloud_inference_provider_unavailable',
+    failure: {
+      failedStage: 'cloud_pending' as const,
+      message: '제공자 응답 없음',
+      guidance: '잠시 후 다시 시도하세요.',
+      retryable: true,
+    },
+  };
+
+  assert.equal(getChatResponseMetadata(failedRun), null);
+  assert.equal(getChatRunFeedback(failedRun)?.badgeLabel, '실행 중단');
+  assert.match(chatRouteSource, /activeRun\?\.status === 'completed' \? null : getChatRunFeedback\(activeRun\)/);
+});
+
+test('story-4.2:VAL-2 and story-4.2:AC-3 continueTaskInWorkbench opens the existing task in workbench without creating a new task id', async () => {
+  const openRequests: Array<{ taskId: string; panelSlot?: string }> = [];
+  const navigations: string[] = [];
+
+  const didNavigate = await continueTaskInWorkbench({
+    desktopAvailable: true,
+    navigate(path) {
+      navigations.push(path);
+    },
+    openInWorkbench: async (request) => {
+      openRequests.push(request);
+      return {
+        layoutId: 'layout-primary',
+        taskId: request.taskId,
+        panelSlot: 'north-west',
+      };
+    },
+    taskId: 'task-continue-001',
+  });
+
+  assert.equal(didNavigate, true);
+  assert.deepEqual(openRequests, [{ taskId: 'task-continue-001' }]);
+  assert.deepEqual(navigations, ['/workbench']);
+  assert.match(chatRouteSource, /responseMetadata\.actionLabel/);
+  assert.match(chatRouteSource, /desktopClient\.commands\.openInWorkbench/);
+  assert.match(chatStylesSource, /\.response-meta-action\s*\{/);
+});
+
+test('story-4.2:AC-5 and story-4.2:AC-6 source keeps response metadata compact and uses a restrained mint accent for savings only', () => {
+  assert.match(chatRouteSource, /className=\"response-meta-row\"/);
+  assert.match(chatRouteSource, /response-meta-item-savings/);
+  assert.match(chatStylesSource, /\.response-meta-row\s*\{/);
+  assert.match(chatStylesSource, /font-size:\s*0\.8rem/);
+  assert.match(chatStylesSource, /\.response-meta-item-savings\s*\{/);
+  assert.match(chatStylesSource, /background:\s*rgba\(55,\s*201,\s*171,\s*0\.12\)/);
 });

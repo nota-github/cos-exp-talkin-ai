@@ -1,7 +1,10 @@
 import type {
   ChatFeedMessage,
+  ChatFeedRunUsageSummary,
   ChatFeedRunSummary,
   CloudModelId,
+  OpenInWorkbenchCommand,
+  OpenInWorkbenchResult,
   OptimizationMode,
   SubmitPromptCommand,
   SubmitPromptResult,
@@ -37,6 +40,17 @@ export type ChatRunFeedback = {
   detail: string | null;
   actions: ChatRunFeedbackActionId[];
   steps: ChatRunFeedbackStep[];
+};
+
+export type ChatResponseMetadataItem = {
+  id: 'model' | 'latency' | 'savings';
+  label: string;
+  tone: 'neutral' | 'savings';
+};
+
+export type ChatResponseMetadata = {
+  items: ChatResponseMetadataItem[];
+  actionLabel: string;
 };
 
 export type ChatStarterCard = {
@@ -124,6 +138,10 @@ export const optimizationModeOptions: Array<{ id: OptimizationMode; label: strin
   { id: 'long_context', label: '긴 컨텍스트' },
 ];
 
+function getModelLabel(model: CloudModelId) {
+  return modelOptions.find((option) => option.id === model)?.label ?? model;
+}
+
 export function createIdleChatSubmitState(): ChatSubmitState {
   return {
     status: 'idle',
@@ -165,6 +183,22 @@ export function getChatDraftPreview(promptDraft: string) {
   return trimmed.length > 0 ? trimmed : chatSurfaceCopy.draftPreviewEmpty;
 }
 
+function formatLatencyLabel(latencyMs: number) {
+  if (latencyMs < 1_000) {
+    return `지연 ${latencyMs}ms`;
+  }
+
+  const seconds = latencyMs / 1_000;
+  const displaySeconds = seconds >= 10 ? seconds.toFixed(0) : seconds.toFixed(1);
+  return `지연 ${displaySeconds}초`;
+}
+
+function formatSavingsLabel(usage: ChatFeedRunUsageSummary) {
+  return usage.isEstimated
+    ? `예상 절감 ${usage.savingsRate}%`
+    : `${usage.savingsRate}% 절감`;
+}
+
 export function mergeVisibleConversationMessages(
   persistedMessages: ChatFeedMessage[],
   pendingSubmission: PendingChatSubmission | null,
@@ -178,6 +212,33 @@ export function mergeVisibleConversationMessages(
   }
 
   return [...persistedMessages, pendingSubmission];
+}
+
+export function getChatResponseMetadata(run: ChatFeedRunSummary | null): ChatResponseMetadata | null {
+  if (run?.status !== 'completed' || !run.usage) {
+    return null;
+  }
+
+  return {
+    items: [
+      {
+        id: 'model',
+        label: getModelLabel(run.model),
+        tone: 'neutral',
+      },
+      {
+        id: 'latency',
+        label: formatLatencyLabel(run.usage.latencyMs),
+        tone: 'neutral',
+      },
+      {
+        id: 'savings',
+        label: formatSavingsLabel(run.usage),
+        tone: 'savings',
+      },
+    ],
+    actionLabel: '작업대에서 계속하기',
+  };
 }
 
 const runStepOrder: ChatRunFeedbackStep['id'][] = ['optimizing', 'cloud_pending', 'restoring'];
@@ -473,6 +534,23 @@ export function getRunFeedbackActionLabel(actionId: ChatRunFeedbackActionId) {
     case 'select_other_model':
       return '다른 모델 선택';
   }
+}
+
+export async function continueTaskInWorkbench(options: {
+  desktopAvailable: boolean;
+  navigate: (path: string) => void;
+  openInWorkbench: (request: OpenInWorkbenchCommand) => Promise<OpenInWorkbenchResult>;
+  taskId: string | null;
+}) {
+  if (!options.desktopAvailable || !options.taskId) {
+    return false;
+  }
+
+  await options.openInWorkbench({
+    taskId: options.taskId,
+  });
+  options.navigate('/workbench');
+  return true;
 }
 
 export async function submitChatPromptDraft(options: {

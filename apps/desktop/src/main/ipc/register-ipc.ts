@@ -208,6 +208,19 @@ function createInitialState(): DesktopIpcState {
           createdAt: '2026-06-08T01:10:00.000Z',
         },
       ],
+      runs: [
+        {
+          runId: 'run-001',
+          sourceMessageId: 'msg-001',
+          status: 'queued',
+          stage: 'queued',
+          model: primaryTask.model,
+          mode: primaryTask.mode,
+          errorCode: null,
+          failure: null,
+          usage: null,
+        },
+      ],
       activeRun: {
         runId: 'run-001',
         sourceMessageId: 'msg-001',
@@ -217,6 +230,7 @@ function createInitialState(): DesktopIpcState {
         mode: primaryTask.mode,
         errorCode: null,
         failure: null,
+        usage: null,
       },
     },
     workbenchLayout: {
@@ -402,6 +416,7 @@ function stageSubmittedPromptInState(
     mode: request.optimizationMode,
     errorCode: null,
     failure: null,
+    usage: null,
   };
 
   draftState.tasks[ids.taskId] = {
@@ -430,6 +445,7 @@ function stageSubmittedPromptInState(
   draftState.chatFeed.activeTaskTitle = title;
   draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
   draftState.chatFeed.messages = [nextMessage];
+  draftState.chatFeed.runs = [nextRun];
   draftState.chatFeed.activeRun = nextRun;
   draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
 
@@ -479,7 +495,12 @@ function stageRetriedRunInState(
     mode,
     errorCode: null,
     failure: null,
+    usage: null,
   };
+  draftState.chatFeed.runs = [
+    ...draftState.chatFeed.runs.filter((run) => run.runId !== result.runId),
+    draftState.chatFeed.activeRun,
+  ];
 
   draftState.historyEntries[result.runId] = {
     ...entry,
