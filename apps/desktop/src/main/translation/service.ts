@@ -9,6 +9,12 @@ export type TranslationPreservationInput = {
   preserveNumericLiterals: boolean;
 };
 
+export type TranslationMcpOptimizationMode =
+  | 'default'
+  | 'cost_saver'
+  | 'quality'
+  | 'long_context';
+
 export type OptimizePromptInput = {
   sourceKorean: string;
   mode: OptimizationMode;
@@ -19,7 +25,7 @@ export type OptimizePromptInput = {
 export type OptimizePromptResult = {
   optimizedEnglish: string;
   preservationChecks: {
-    namedEntitiesPreserved: boolean;
+    entitiesPreserved: boolean;
     constraintsPreserved: boolean;
     outputFormatPreserved: boolean;
   };
@@ -37,6 +43,21 @@ export type RestoreResponseInput = {
 export type RestoreResponseResult = {
   restoredKorean: string;
   notes?: string[];
+};
+
+export type TranslationMcpOptimizePromptParams = {
+  sourceKorean: string;
+  mode: TranslationMcpOptimizationMode;
+  conversationSummary?: string;
+  outputHints?: string[];
+  namedEntities?: string[];
+};
+
+export type TranslationMcpRestoreResponseParams = {
+  sourceKorean: string;
+  optimizedEnglish: string;
+  cloudEnglishResponse: string;
+  outputHints?: string[];
 };
 
 export type SummarizeConversationContextInput = {
@@ -90,11 +111,11 @@ export type TranslationMcpMethodDefinitions = {
     result: TranslationMcpHealthPayload;
   };
   optimizePrompt: {
-    params: OptimizePromptInput;
+    params: TranslationMcpOptimizePromptParams;
     result: OptimizePromptResult;
   };
   restoreResponse: {
-    params: RestoreResponseInput;
+    params: TranslationMcpRestoreResponseParams;
     result: RestoreResponseResult;
   };
   summarizeConversationContext: {
@@ -181,6 +202,77 @@ function ensureMainProcess(
 
 function nowInMilliseconds() {
   return Date.now();
+}
+
+function uniqueNonEmpty(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))];
+}
+
+const optimizationModeMap: Record<OptimizationMode, TranslationMcpOptimizationMode> = {
+  balanced: 'default',
+  savings: 'cost_saver',
+  quality: 'quality',
+  long_context: 'long_context',
+};
+
+const structureHintLabels: Record<
+  TranslationPreservationInput['preserveStructure'][number],
+  string
+> = {
+  tables: 'Preserve table structure',
+  lists: 'Preserve list structure',
+  headings: 'Preserve heading hierarchy',
+  checklists: 'Preserve checklist structure',
+};
+
+export function normalizeOptimizationModeForTranslationMcp(
+  mode: OptimizationMode,
+): TranslationMcpOptimizationMode {
+  return optimizationModeMap[mode];
+}
+
+export function buildOutputHintsForTranslationMcp(
+  preservation: TranslationPreservationInput,
+) {
+  const outputHints = [
+    ...preservation.requiredConstraints,
+    ...(preservation.outputFormat
+      ? [`Target output format: ${preservation.outputFormat}`]
+      : []),
+    ...preservation.preserveStructure.map((entry) => structureHintLabels[entry]),
+    ...(preservation.preserveNumericLiterals ? ['Preserve numeric literals exactly'] : []),
+  ];
+
+  return uniqueNonEmpty(outputHints);
+}
+
+export function normalizeOptimizePromptInputForTranslationMcp(
+  input: OptimizePromptInput,
+): TranslationMcpOptimizePromptParams {
+  const outputHints = buildOutputHintsForTranslationMcp(input.preservation);
+  const namedEntities = uniqueNonEmpty(input.preservation.namedEntities);
+
+  return {
+    sourceKorean: input.sourceKorean,
+    mode: normalizeOptimizationModeForTranslationMcp(input.mode),
+    conversationSummary:
+      input.conversationSummary?.trim().length ? input.conversationSummary : undefined,
+    outputHints: outputHints.length > 0 ? outputHints : undefined,
+    namedEntities: namedEntities.length > 0 ? namedEntities : undefined,
+  };
+}
+
+export function normalizeRestoreResponseInputForTranslationMcp(
+  input: RestoreResponseInput,
+): TranslationMcpRestoreResponseParams {
+  const outputHints = buildOutputHintsForTranslationMcp(input.preservation);
+
+  return {
+    sourceKorean: input.sourceKorean,
+    optimizedEnglish: input.optimizedEnglish,
+    cloudEnglishResponse: input.cloudEnglishResponse,
+    outputHints: outputHints.length > 0 ? outputHints : undefined,
+  };
 }
 
 function normalizeHealthPayload(
@@ -492,10 +584,16 @@ export function createTranslationMcpAdapter(
       }
     },
     optimizePrompt(input) {
-      return runtime.invoke('optimizePrompt', input);
+      return runtime.invoke(
+        'optimizePrompt',
+        normalizeOptimizePromptInputForTranslationMcp(input),
+      );
     },
     restoreResponse(input) {
-      return runtime.invoke('restoreResponse', input);
+      return runtime.invoke(
+        'restoreResponse',
+        normalizeRestoreResponseInputForTranslationMcp(input),
+      );
     },
     summarizeConversationContext(input) {
       return runtime.invoke('summarizeConversationContext', input);

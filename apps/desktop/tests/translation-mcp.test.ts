@@ -64,7 +64,7 @@ test('story-3.1:VAL-1 and story-3.1:AC-1 fake runtime supports main-process heal
           optimizedEnglish:
             'Create a 3-step markdown checklist for the business proposal. Preserve every number and named entity.',
           preservationChecks: {
-            namedEntitiesPreserved: true,
+            entitiesPreserved: true,
             constraintsPreserved: true,
             outputFormatPreserved: true,
           },
@@ -110,7 +110,7 @@ test('story-3.1:VAL-1 and story-3.1:AC-1 fake runtime supports main-process heal
   });
   const optimized = await service.translationAdapter?.optimizePrompt({
     sourceKorean: '사업 제안서를 세 단계 체크리스트로 정리해줘. 숫자와 고유명사는 유지해줘.',
-    mode: 'quality',
+    mode: 'savings',
     conversationSummary: summary?.summary,
     preservation,
   });
@@ -119,7 +119,7 @@ test('story-3.1:VAL-1 and story-3.1:AC-1 fake runtime supports main-process heal
     optimizedEnglish: optimized?.optimizedEnglish ?? '',
     cloudEnglishResponse:
       '1. Define the proposal goal.\n2. Preserve all numbers.\n3. Keep the named entities unchanged.',
-    mode: 'quality',
+    mode: 'savings',
     preservation,
   });
 
@@ -133,7 +133,7 @@ test('story-3.1:VAL-1 and story-3.1:AC-1 fake runtime supports main-process heal
     'User needs a preserved markdown checklist in English prompt form.',
   );
   assert.match(optimized?.optimizedEnglish ?? '', /markdown checklist/i);
-  assert.equal(optimized?.preservationChecks.namedEntitiesPreserved, true);
+  assert.equal(optimized?.preservationChecks.entitiesPreserved, true);
   assert.match(restored?.restoredKorean ?? '', /3단계 마크다운 체크리스트/);
   assert.deepEqual(
     capturedRequests.map((entry) => entry.method),
@@ -144,12 +144,39 @@ test('story-3.1:VAL-1 and story-3.1:AC-1 fake runtime supports main-process heal
     'quality',
   );
   assert.deepEqual(
-    (capturedRequests[1]?.payload as { preservation: typeof preservation }).preservation,
-    preservation,
+    capturedRequests[1]?.payload,
+    {
+      sourceKorean: '사업 제안서를 세 단계 체크리스트로 정리해줘. 숫자와 고유명사는 유지해줘.',
+      mode: 'cost_saver',
+      conversationSummary: 'User needs a preserved markdown checklist in English prompt form.',
+      outputHints: [
+        'Keep a 3-step checklist',
+        'Preserve every number',
+        'Target output format: markdown checklist',
+        'Preserve checklist structure',
+        'Preserve heading hierarchy',
+        'Preserve numeric literals exactly',
+      ],
+      namedEntities: ['Talkin AI', 'Claude Sonnet'],
+    },
   );
-  assert.equal(
-    (capturedRequests[2]?.payload as { mode: string }).mode,
-    'quality',
+  assert.deepEqual(
+    capturedRequests[2]?.payload,
+    {
+      sourceKorean: '사업 제안서를 세 단계 체크리스트로 정리해줘. 숫자와 고유명사는 유지해줘.',
+      optimizedEnglish:
+        'Create a 3-step markdown checklist for the business proposal. Preserve every number and named entity.',
+      cloudEnglishResponse:
+        '1. Define the proposal goal.\n2. Preserve all numbers.\n3. Keep the named entities unchanged.',
+      outputHints: [
+        'Keep a 3-step checklist',
+        'Preserve every number',
+        'Target output format: markdown checklist',
+        'Preserve checklist structure',
+        'Preserve heading hierarchy',
+        'Preserve numeric literals exactly',
+      ],
+    },
   );
 });
 
