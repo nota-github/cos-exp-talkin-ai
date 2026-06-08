@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useRendererSettings } from '../app/renderer-settings';
 import {
   createDesktopQueryDescriptor,
   getDesktopQueryCache,
@@ -10,6 +11,7 @@ import {
   formatHistoryTimestamp,
   getHistoryAdvancedReveals,
   getHistoryArtifactSections,
+  getHistoryDefaultVisibility,
   getHistoryListMeta,
   getHistoryModeLabel,
   getHistoryUsageCards,
@@ -113,6 +115,7 @@ function HistoryEmptyState() {
 export function UsageRoute() {
   const desktopClient = getRendererDesktopClient();
   const queryCache = getDesktopQueryCache();
+  const { settings } = useRendererSettings();
   const monthUsageDashboardDescriptor = createDesktopQueryDescriptor('getUsageDashboard', {
     range: 'month',
   });
@@ -138,11 +141,18 @@ export function UsageRoute() {
   const historyFeed = desktopClient.available
     ? historyFeedQuery.data
     : previewHistoryFeed;
+  const historyDefaultVisibility = getHistoryDefaultVisibility(
+    settings?.advancedPromptPreview ?? false,
+  );
   const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<string | null>(
     desktopClient.available ? null : previewHistoryFeed.items[0]?.runId ?? null,
   );
-  const [showOptimizedPrompt, setShowOptimizedPrompt] = useState(false);
-  const [showProviderResponse, setShowProviderResponse] = useState(false);
+  const [showOptimizedPrompt, setShowOptimizedPrompt] = useState(
+    historyDefaultVisibility.showOptimizedPrompt,
+  );
+  const [showProviderResponse, setShowProviderResponse] = useState(
+    historyDefaultVisibility.showProviderResponse,
+  );
   const monthDashboard = desktopClient.available
     ? monthUsageDashboardQuery.data
     : previewUsageDashboard;
@@ -244,9 +254,13 @@ export function UsageRoute() {
   }, [historyItems, selectedHistoryRunId]);
 
   useEffect(() => {
-    setShowOptimizedPrompt(false);
-    setShowProviderResponse(false);
-  }, [historyDetailRunId]);
+    setShowOptimizedPrompt(historyDefaultVisibility.showOptimizedPrompt);
+    setShowProviderResponse(historyDefaultVisibility.showProviderResponse);
+  }, [
+    historyDefaultVisibility.showOptimizedPrompt,
+    historyDefaultVisibility.showProviderResponse,
+    historyDetailRunId,
+  ]);
 
   return (
     <section className="screen screen-usage">

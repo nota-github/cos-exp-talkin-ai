@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './AppShell';
 import { defaultRoutePath, navigationItems } from './navigation';
+import { RendererSettingsProvider } from './renderer-settings';
 import { ChatRoute } from '../routes/ChatRoute';
 import { WorkbenchRoute } from '../routes/WorkbenchRoute';
 import { ProjectsRoute } from '../routes/ProjectsRoute';
@@ -18,26 +19,28 @@ const routeElements = {
 export function App() {
   return (
     <HashRouter>
-      <Routes>
-        <Route element={<AppShell />}>
-          {navigationItems.map((item) => (
-            <Route
-              key={item.id}
-              path={item.path}
-              element={routeElements[item.id]}
-            />
-          ))}
-          <Route
-            path="*"
-            element={
-              <Navigate
-                to={defaultRoutePath}
-                replace
+      <RendererSettingsProvider>
+        <Routes>
+          <Route element={<AppShell />}>
+            {navigationItems.map((item) => (
+              <Route
+                key={item.id}
+                path={item.path}
+                element={routeElements[item.id]}
               />
-            }
-          />
-        </Route>
-      </Routes>
+            ))}
+            <Route
+              path="*"
+              element={
+                <Navigate
+                  to={defaultRoutePath}
+                  replace
+                />
+              }
+            />
+          </Route>
+        </Routes>
+      </RendererSettingsProvider>
     </HashRouter>
   );
 }
