@@ -271,6 +271,17 @@ test('story-4.1:AC-4 desktop migration preserves legacy pricing versions and bac
 
   try {
     await handle.connection.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('planning', 'in_progress', 'ai_review', 'human_review', 'completed')),
+        project_id TEXT,
+        source_screen TEXT NOT NULL CHECK (source_screen IN ('chat', 'workbench', 'projects', 'kanban')),
+        usage_category TEXT NOT NULL CHECK (usage_category IN ('general', 'starter_template', 'project_linked')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_activity_at TEXT NOT NULL
+      );
       CREATE TABLE run_records (
         id TEXT PRIMARY KEY
       );
@@ -328,8 +339,8 @@ test('story-4.1:AC-4 desktop migration preserves legacy pricing versions and bac
       WHERE id = 'usage-legacy';
     `);
 
-    assert.equal(version, 3);
-    assert.equal(await getSchemaVersion(handle.connection), 3);
+    assert.equal(version, 4);
+    assert.equal(await getSchemaVersion(handle.connection), 4);
     assert.ok(columns.some((column) => column.name === 'is_estimated'));
     assert.deepEqual(rows, [
       {
