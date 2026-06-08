@@ -1,5 +1,6 @@
 import type {
   ChatFeedMessage,
+  ChatFeedRunSummary,
   CloudModelId,
   OptimizationMode,
   SubmitPromptCommand,
@@ -18,6 +19,24 @@ export type ChatSubmitOutcome = {
   pendingSubmission: PendingChatSubmission | null;
   promptDraft: string;
   submitState: ChatSubmitState;
+};
+
+export type ChatRunFeedbackActionId = 'retry' | 'open_settings' | 'select_other_model';
+
+export type ChatRunFeedbackStep = {
+  id: 'optimizing' | 'cloud_pending' | 'restoring';
+  label: string;
+  state: 'pending' | 'current' | 'completed';
+};
+
+export type ChatRunFeedback = {
+  tone: 'progress' | 'success' | 'error';
+  badgeLabel: string;
+  title: string;
+  description: string;
+  detail: string | null;
+  actions: ChatRunFeedbackActionId[];
+  steps: ChatRunFeedbackStep[];
 };
 
 export type ChatStarterCard = {
@@ -58,6 +77,11 @@ export const chatSurfaceCopy = {
   submitSavedMessage: '한국어 요청이 로컬 인박스에 저장되었습니다. 대화 피드에서 바로 이어갈 수 있습니다.',
   submitFailureMessage:
     '로컬 저장에 실패했습니다. 입력한 내용은 그대로 남아 있으니 다시 시도해 주세요.',
+  runRetryingMessage: '같은 한국어 원문으로 다시 실행을 요청하고 있습니다.',
+  runRetryFailedMessage:
+    '재시도 요청을 시작하지 못했습니다. 기존 한국어 원문은 그대로 남아 있으니 잠시 후 다시 시도해 주세요.',
+  modelRetryPrefillMessage:
+    '같은 한국어 원문을 다시 불러왔습니다. 모델을 바꾼 뒤 다시 보내세요.',
   conversationReadyTitle: '저장된 대화',
   queuedRunLabel: '로컬 저장 완료 · 실행 대기',
   savingRunLabel: '로컬 저장 중',
@@ -154,6 +178,301 @@ export function mergeVisibleConversationMessages(
   }
 
   return [...persistedMessages, pendingSubmission];
+}
+
+const runStepOrder: ChatRunFeedbackStep['id'][] = ['optimizing', 'cloud_pending', 'restoring'];
+
+const runStepLabels: Record<ChatRunFeedbackStep['id'], string> = {
+  optimizing: '로컬 최적화',
+  cloud_pending: '모델 응답 대기',
+  restoring: '한국어 복원',
+};
+
+function containsHangul(value: string | null) {
+  return value !== null && /[가-힣]/.test(value);
+}
+
+function classifyRunFailure(errorCode: string | null) {
+  if (!errorCode) {
+    return 'unknown';
+  }
+
+  if (
+    errorCode === 'local_optimization_missing_source_prompt' ||
+    errorCode.startsWith('local_optimization_')
+  ) {
+    return 'local_engine';
+  }
+
+  if (
+    errorCode === 'run_completion_missing_source_prompt' ||
+    errorCode.startsWith('local_restore_')
+  ) {
+    return 'local_restore';
+  }
+
+  if (errorCode === 'cloud_inference_auth') {
+    return 'provider_auth';
+  }
+
+  if (errorCode === 'cloud_inference_rate_limit') {
+    return 'provider_rate_limit';
+  }
+
+  if (errorCode === 'cloud_inference_network') {
+    return 'provider_network';
+  }
+
+  if (errorCode === 'cloud_inference_provider_unavailable') {
+    return 'provider_unavailable';
+  }
+
+  if (errorCode === 'cloud_inference_invalid_request') {
+    return 'invalid_request';
+  }
+
+  return 'unknown';
+}
+
+function getJourneyStage(run: ChatFeedRunSummary) {
+  if (run.status === 'failed') {
+    const failedStage = run.failure?.failedStage;
+
+    if (failedStage === 'cloud_pending' || failedStage === 'restoring') {
+      return failedStage;
+    }
+
+    return 'optimizing';
+  }
+
+  switch (run.stage) {
+    case 'cloud_pending':
+      return 'cloud_pending';
+    case 'restoring':
+    case 'completed':
+      return 'restoring';
+    case 'optimized':
+      return 'cloud_pending';
+    case 'queued':
+    case 'optimizing':
+    case 'failed':
+    case null:
+    default:
+      return 'optimizing';
+  }
+}
+
+function buildRunFeedbackSteps(run: ChatFeedRunSummary): ChatRunFeedbackStep[] {
+  const currentStage = getJourneyStage(run);
+  const currentIndex = runStepOrder.indexOf(currentStage);
+
+  return runStepOrder.map((stepId, index) => {
+    let state: ChatRunFeedbackStep['state'] = 'pending';
+
+    if (run.status === 'completed') {
+      state = 'completed';
+    } else if (index < currentIndex) {
+      state = 'completed';
+    } else if (index === currentIndex) {
+      state = 'current';
+    }
+
+    return {
+      id: stepId,
+      label: runStepLabels[stepId],
+      state,
+    };
+  });
+}
+
+function getFailureStageLabel(run: ChatFeedRunSummary) {
+  const failedStage = run.failure?.failedStage;
+
+  if (failedStage === 'restoring') {
+    return '한국어 복원';
+  }
+
+  if (failedStage === 'cloud_pending') {
+    return '모델 응답';
+  }
+
+  return '로컬 최적화';
+}
+
+function buildFailureDescription(run: ChatFeedRunSummary) {
+  const failureKind = classifyRunFailure(run.errorCode);
+
+  switch (failureKind) {
+    case 'local_engine':
+    case 'local_restore':
+      return '설정을 확인한 뒤 같은 한국어 원문으로 다시 시도할 수 있습니다.';
+    case 'provider_auth':
+      return 'API 키 연결 상태를 먼저 확인한 뒤 다시 실행하거나 다른 모델을 선택하세요.';
+    case 'provider_rate_limit':
+    case 'provider_network':
+    case 'provider_unavailable':
+      return '잠시 후 다시 시도하거나 다른 모델로 이어가는 편이 안전합니다.';
+    case 'invalid_request':
+      return '모델을 바꾸거나 요청 방향을 조정한 뒤 다시 보내는 편이 안전합니다.';
+    case 'unknown':
+    default:
+      return '같은 한국어 원문은 그대로 남아 있으니 안전한 다음 행동을 고른 뒤 다시 이어가세요.';
+  }
+}
+
+function buildFailureActions(run: ChatFeedRunSummary): ChatRunFeedbackActionId[] {
+  const failureKind = classifyRunFailure(run.errorCode);
+  const actions: ChatRunFeedbackActionId[] = [];
+  const retryable = run.failure?.retryable !== false;
+
+  if (
+    retryable &&
+    (failureKind === 'local_engine' ||
+      failureKind === 'local_restore' ||
+      failureKind === 'provider_rate_limit' ||
+      failureKind === 'provider_network' ||
+      failureKind === 'provider_unavailable' ||
+      failureKind === 'unknown')
+  ) {
+    actions.push('retry');
+  }
+
+  if (
+    failureKind === 'local_engine' ||
+    failureKind === 'local_restore' ||
+    failureKind === 'provider_auth' ||
+    failureKind === 'unknown'
+  ) {
+    actions.push('open_settings');
+  }
+
+  if (
+    failureKind === 'provider_auth' ||
+    failureKind === 'provider_rate_limit' ||
+    failureKind === 'provider_network' ||
+    failureKind === 'provider_unavailable' ||
+    failureKind === 'invalid_request'
+  ) {
+    actions.push('select_other_model');
+  }
+
+  return actions;
+}
+
+function buildFailureDetail(run: ChatFeedRunSummary) {
+  if (containsHangul(run.failure?.guidance ?? null)) {
+    return run.failure?.guidance ?? null;
+  }
+
+  if (containsHangul(run.failure?.message ?? null)) {
+    return run.failure?.message ?? null;
+  }
+
+  return null;
+}
+
+export function resolveSourceMessageForRun(
+  messages: ChatFeedMessage[],
+  run: ChatFeedRunSummary | null,
+) {
+  if (!run) {
+    return null;
+  }
+
+  return (
+    messages.find((message) => message.messageId === run.sourceMessageId) ??
+    [...messages].reverse().find((message) => message.role === 'user') ??
+    null
+  );
+}
+
+export function getChatRunFeedback(run: ChatFeedRunSummary | null): ChatRunFeedback | null {
+  if (!run) {
+    return null;
+  }
+
+  if (run.status === 'failed') {
+    const stageLabel = getFailureStageLabel(run);
+
+    return {
+      tone: 'error',
+      badgeLabel: '실행 중단',
+      title: `${stageLabel} 단계에서 멈췄습니다`,
+      description: buildFailureDescription(run),
+      detail: buildFailureDetail(run),
+      actions: buildFailureActions(run),
+      steps: buildRunFeedbackSteps(run),
+    };
+  }
+
+  if (run.status === 'completed') {
+    return {
+      tone: 'success',
+      badgeLabel: '응답 준비 완료',
+      title: '최종 답변이 대화 피드에 반영되었습니다',
+      description: '같은 작업 흐름 안에서 다음 한국어 지시를 바로 이어갈 수 있습니다.',
+      detail: null,
+      actions: [],
+      steps: buildRunFeedbackSteps(run),
+    };
+  }
+
+  if (run.status === 'cloud_pending' || run.status === 'optimized') {
+    return {
+      tone: 'progress',
+      badgeLabel: '모델 응답 대기',
+      title: '선택한 클라우드 모델이 최적화된 영어 프롬프트를 처리하고 있습니다',
+      description: '원문 한국어는 대화 기록에 그대로 남고, 내부적으로만 더 가벼운 영어 토큰 흐름을 사용합니다.',
+      detail: null,
+      actions: [],
+      steps: buildRunFeedbackSteps(run),
+    };
+  }
+
+  if (run.status === 'restoring') {
+    return {
+      tone: 'progress',
+      badgeLabel: '한국어 복원',
+      title: '영어 응답을 자연스러운 한국어로 복원하고 있습니다',
+      description: '표, 숫자, 체크리스트 구조를 유지한 채 최종 답변을 정리하고 있습니다.',
+      detail: null,
+      actions: [],
+      steps: buildRunFeedbackSteps(run),
+    };
+  }
+
+  if (run.status === 'optimizing') {
+    return {
+      tone: 'progress',
+      badgeLabel: '로컬 최적화',
+      title: '한국어 요청을 더 효율적인 영어 토큰 흐름으로 정리하고 있습니다',
+      description: '의도, 조건, 고유명사, 출력 형식을 보존한 채 로컬 엔진이 먼저 준비합니다.',
+      detail: null,
+      actions: [],
+      steps: buildRunFeedbackSteps(run),
+    };
+  }
+
+  return {
+    tone: 'progress',
+    badgeLabel: '실행 준비',
+    title: '한국어 원문을 저장했고 로컬 최적화를 곧 시작합니다',
+    description: '원문은 그대로 남아 있고, 같은 요청을 기반으로 실행 단계를 이어갑니다.',
+    detail: null,
+    actions: [],
+    steps: buildRunFeedbackSteps(run),
+  };
+}
+
+export function getRunFeedbackActionLabel(actionId: ChatRunFeedbackActionId) {
+  switch (actionId) {
+    case 'retry':
+      return '재시도';
+    case 'open_settings':
+      return '설정 확인';
+    case 'select_other_model':
+      return '다른 모델 선택';
+  }
 }
 
 export async function submitChatPromptDraft(options: {

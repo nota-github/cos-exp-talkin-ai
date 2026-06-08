@@ -5,8 +5,11 @@ import {
   chatStarterCards,
   chatSurfaceCopy,
   createStarterDraftSelection,
+  getChatRunFeedback,
   getChatDraftPreview,
+  getRunFeedbackActionLabel,
   mergeVisibleConversationMessages,
+  resolveSourceMessageForRun,
   submitChatPromptDraft,
 } from '../src/renderer/routes/chat-surface.ts';
 
@@ -121,4 +124,141 @@ test('story-2.2:AC-5 and story-2.2:AC-6 source switches the stage from landing g
   assert.match(chatRouteSource, /!showConversationFeed \?/);
   assert.match(chatStylesSource, /\.bubble-meta\s*\{/);
   assert.match(chatStylesSource, /white-space:\s*pre-wrap/);
+});
+
+test('story-3.5:VAL-1 and story-3.5:AC-1 stage feedback compresses optimization, model wait, and restore progress into user-facing copy', () => {
+  const optimizingFeedback = getChatRunFeedback({
+    runId: 'run-201',
+    sourceMessageId: 'msg-201',
+    status: 'optimizing',
+    stage: 'optimizing',
+    model: 'gpt-4.1',
+    mode: 'balanced',
+    errorCode: null,
+    failure: null,
+  });
+  const cloudPendingFeedback = getChatRunFeedback({
+    runId: 'run-202',
+    sourceMessageId: 'msg-202',
+    status: 'cloud_pending',
+    stage: 'cloud_pending',
+    model: 'claude-sonnet-4',
+    mode: 'quality',
+    errorCode: null,
+    failure: null,
+  });
+  const restoringFeedback = getChatRunFeedback({
+    runId: 'run-203',
+    sourceMessageId: 'msg-203',
+    status: 'restoring',
+    stage: 'restoring',
+    model: 'gemini-1.5-pro',
+    mode: 'long_context',
+    errorCode: null,
+    failure: null,
+  });
+
+  assert.equal(optimizingFeedback?.badgeLabel, '로컬 최적화');
+  assert.match(optimizingFeedback?.title ?? '', /영어 토큰 흐름/);
+  assert.equal(optimizingFeedback?.steps[0]?.state, 'current');
+  assert.equal(cloudPendingFeedback?.badgeLabel, '모델 응답 대기');
+  assert.equal(cloudPendingFeedback?.steps[0]?.state, 'completed');
+  assert.equal(cloudPendingFeedback?.steps[1]?.state, 'current');
+  assert.equal(restoringFeedback?.badgeLabel, '한국어 복원');
+  assert.equal(restoringFeedback?.steps[2]?.state, 'current');
+});
+
+test('story-3.5:VAL-2, story-3.5:AC-2, and story-3.5:AC-6 failure guidance prefers safe next actions over raw error codes', () => {
+  const localFailure = getChatRunFeedback({
+    runId: 'run-301',
+    sourceMessageId: 'msg-301',
+    status: 'failed',
+    stage: 'failed',
+    model: 'gpt-4.1',
+    mode: 'balanced',
+    errorCode: 'local_optimization_runtime_error',
+    failure: {
+      failedStage: 'optimizing',
+      message: 'forced local optimization failure',
+      guidance: null,
+      retryable: true,
+    },
+  });
+  const authFailure = getChatRunFeedback({
+    runId: 'run-302',
+    sourceMessageId: 'msg-302',
+    status: 'failed',
+    stage: 'failed',
+    model: 'gpt-4.1',
+    mode: 'balanced',
+    errorCode: 'cloud_inference_auth',
+    failure: {
+      failedStage: 'cloud_pending',
+      message: 'OpenAI 인증에 실패했습니다.',
+      guidance: '설정에서 OpenAI API 키 연결 상태를 확인하세요.',
+      retryable: false,
+    },
+  });
+  const providerFailure = getChatRunFeedback({
+    runId: 'run-303',
+    sourceMessageId: 'msg-303',
+    status: 'failed',
+    stage: 'failed',
+    model: 'claude-sonnet-4',
+    mode: 'quality',
+    errorCode: 'cloud_inference_rate_limit',
+    failure: {
+      failedStage: 'cloud_pending',
+      message: 'Anthropic 요청 한도에 도달했습니다.',
+      guidance: '잠시 후 다시 시도하거나 사용량 한도를 확인하세요.',
+      retryable: true,
+    },
+  });
+
+  assert.equal(localFailure?.title, '로컬 최적화 단계에서 멈췄습니다');
+  assert.deepEqual(localFailure?.actions.map(getRunFeedbackActionLabel), ['재시도', '설정 확인']);
+  assert.match(localFailure?.description ?? '', /다시 시도/);
+  assert.equal(localFailure?.detail, null);
+  assert.equal(authFailure?.title, '모델 응답 단계에서 멈췄습니다');
+  assert.deepEqual(authFailure?.actions.map(getRunFeedbackActionLabel), ['설정 확인', '다른 모델 선택']);
+  assert.equal(authFailure?.detail, '설정에서 OpenAI API 키 연결 상태를 확인하세요.');
+  assert.deepEqual(providerFailure?.actions.map(getRunFeedbackActionLabel), ['재시도', '다른 모델 선택']);
+  assert.match(providerFailure?.description ?? '', /다른 모델/);
+});
+
+test('story-3.5:AC-3 source exposes retry, settings, and same-prompt model-switch actions without a log-panel layout', () => {
+  const sourceMessage = resolveSourceMessageForRun(
+    [
+      {
+        messageId: 'msg-401',
+        conversationId: 'conv-401',
+        runId: 'run-401',
+        role: 'user',
+        contentKo: '같은 원문으로 다시 시도해줘.',
+        createdAt: '2026-06-08T14:00:00.000Z',
+      },
+    ],
+    {
+      runId: 'run-401',
+      sourceMessageId: 'msg-401',
+      status: 'failed',
+      stage: 'failed',
+      model: 'gpt-4.1',
+      mode: 'balanced',
+      errorCode: 'cloud_inference_network',
+      failure: {
+        failedStage: 'cloud_pending',
+        message: '네트워크 오류',
+        guidance: '잠시 후 다시 시도하거나 다른 모델로 이어갈 수 있습니다.',
+        retryable: true,
+      },
+    },
+  );
+
+  assert.equal(sourceMessage?.contentKo, '같은 원문으로 다시 시도해줘.');
+  assert.match(chatRouteSource, /run-status-card/);
+  assert.match(chatRouteSource, /desktopClient\.commands\.retryRun/);
+  assert.match(chatRouteSource, /navigate\('\/settings'\)/);
+  assert.match(chatRouteSource, /modelRetryPrefillMessage/);
+  assert.match(chatStylesSource, /\.run-status-card\s*\{/);
 });

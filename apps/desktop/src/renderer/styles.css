@@ -552,6 +552,87 @@ button {
   color: #0d7c67;
 }
 
+.run-status-card {
+  display: grid;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(240, 248, 255, 0.82) 100%);
+}
+
+.run-status-card-success {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(229, 251, 246, 0.82) 100%);
+}
+
+.run-status-card-error {
+  border-color: rgba(20, 80, 189, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 244, 244, 0.88) 100%);
+}
+
+.run-status-header {
+  display: grid;
+  gap: 8px;
+}
+
+.run-status-header strong,
+.run-status-detail,
+.run-status-note {
+  margin: 0;
+}
+
+.run-status-header p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.run-status-steps,
+.run-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.run-status-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  border: 1px solid rgba(18, 42, 74, 0.08);
+  background: rgba(18, 42, 74, 0.04);
+  color: var(--muted);
+}
+
+.run-status-step-current {
+  border-color: rgba(20, 80, 189, 0.18);
+  background: rgba(34, 118, 245, 0.12);
+  color: var(--blue-deep);
+}
+
+.run-status-step-completed {
+  border-color: rgba(13, 124, 103, 0.18);
+  background: rgba(55, 201, 171, 0.14);
+  color: #0d7c67;
+}
+
+.run-status-detail,
+.run-status-note {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.run-status-note {
+  color: var(--blue-deep);
+  font-weight: 700;
+}
+
+.run-action-button {
+  min-width: 132px;
+}
+
 .composer {
   margin-top: auto;
   display: grid;

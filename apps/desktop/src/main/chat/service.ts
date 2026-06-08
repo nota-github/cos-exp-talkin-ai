@@ -4,9 +4,12 @@ import type {
   ChatFeedMessage,
   ChatFeedQuery,
   ChatFeedResult,
+  ChatFeedRunFailureSummary,
   ChatFeedRunSummary,
   CloudModelId,
   OptimizationMode,
+  RetryRunCommand,
+  RetryRunResult,
   SubmitPromptCommand,
   SubmitPromptResult,
   TaskStatus,
@@ -62,17 +65,21 @@ type MessageRow = {
 
 type RunRow = {
   id: string;
+  message_id: string;
   status: ChatFeedRunSummary['status'];
   model: CloudModelId;
   mode: OptimizationMode;
+  error_code: string | null;
 };
 
 type RunStageRow = {
   stage: Exclude<ChatFeedRunSummary['stage'], null>;
+  details_json: string | null;
 };
 
 export interface ChatHistoryService {
   submitPrompt(request: SubmitPromptCommand): Promise<SubmitPromptResult>;
+  retryRun(request: RetryRunCommand): Promise<RetryRunResult>;
   getChatFeed(request: ChatFeedQuery): Promise<ChatFeedResult>;
 }
 
@@ -149,6 +156,57 @@ function createEmptyChatFeed(): ChatFeedResult {
   };
 }
 
+function parseStageDetails(detailsJson: string | null) {
+  if (!detailsJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(detailsJson) as Record<string, unknown>;
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function buildFailureSummary(
+  run: Pick<RunRow, 'status' | 'error_code'>,
+  latestStage: RunStageRow | undefined,
+): ChatFeedRunFailureSummary | null {
+  if (run.status !== 'failed' || !latestStage) {
+    return null;
+  }
+
+  const details = parseStageDetails(latestStage.details_json);
+  const failedStage = readString(details?.stage);
+
+  return {
+    failedStage:
+      failedStage === 'queued' ||
+      failedStage === 'optimizing' ||
+      failedStage === 'optimized' ||
+      failedStage === 'cloud_pending' ||
+      failedStage === 'restoring' ||
+      failedStage === 'completed' ||
+      failedStage === 'failed'
+        ? failedStage
+        : latestStage.stage,
+    message: readString(details?.message),
+    guidance: readString(details?.guidance),
+    retryable:
+      readBoolean(details?.retryable) ??
+      readBoolean(details?.recoverable),
+  };
+}
+
 async function withChatPersistence<TValue>(
   options: PersistentChatHistoryServiceOptions,
   work: (persistence: ChatRunPersistence, connection: SqliteConnection) => Promise<TValue>,
@@ -221,9 +279,11 @@ async function getLatestRun(
   const runRows = await connection.query<RunRow>(`
     SELECT
       id,
+      message_id,
       status,
       model,
-      mode
+      mode,
+      error_code
     FROM run_records
     WHERE conversation_id = ${sqlValue(conversationId)}
     ORDER BY started_at DESC
@@ -236,19 +296,25 @@ async function getLatestRun(
   }
 
   const stageRows = await connection.query<RunStageRow>(`
-    SELECT stage
+    SELECT
+      stage,
+      details_json
     FROM run_stages
     WHERE run_id = ${sqlValue(run.id)}
     ORDER BY started_at DESC
     LIMIT 1;
   `);
+  const latestStage = stageRows[0];
 
   return {
     runId: run.id,
+    sourceMessageId: run.message_id,
     status: run.status,
-    stage: stageRows[0]?.stage ?? null,
+    stage: latestStage?.stage ?? null,
     model: run.model,
     mode: run.mode,
+    errorCode: run.error_code,
+    failure: buildFailureSummary(run, latestStage),
   };
 }
 
@@ -282,6 +348,26 @@ export function createPersistentChatHistoryService(
 ): ChatHistoryService {
   const now = options.now ?? (() => new Date().toISOString());
   const createId = options.createId ?? ((prefix: string) => `${prefix}-${randomUUID()}`);
+
+  function queueBackgroundOptimization(runId: string) {
+    if (!options.optimizationStageOrchestrator) {
+      return;
+    }
+
+    void Promise.resolve()
+      .then(() =>
+        options.optimizationStageOrchestrator?.optimizeQueuedRun({
+          runId,
+        }),
+      )
+      .catch((error) => {
+        options.onBackgroundWorkflowError?.({
+          operation: 'optimizeQueuedRun',
+          runId,
+          error,
+        });
+      });
+  }
 
   return {
     async submitPrompt(request) {
@@ -363,21 +449,83 @@ export function createPersistentChatHistoryService(
         };
       });
 
-      if (options.optimizationStageOrchestrator) {
-        void Promise.resolve()
-          .then(() =>
-            options.optimizationStageOrchestrator?.optimizeQueuedRun({
-              runId: result.runId,
-            }),
-          )
-          .catch((error) => {
-            options.onBackgroundWorkflowError?.({
-              operation: 'optimizeQueuedRun',
-              runId: result.runId,
-              error,
-            });
+      queueBackgroundOptimization(result.runId);
+
+      return result;
+    },
+
+    async retryRun(request) {
+      const result = await withChatPersistence(options, async (persistence) => {
+        const createdAt = now();
+        const nextRunId = createId('run');
+        const nextStageId = createId('stage');
+
+        await persistence.transaction(async (tx) => {
+          const previousRun = await tx.runRecords.getById(request.runId);
+
+          if (!previousRun) {
+            throw new Error('재시도할 실행 기록을 찾을 수 없습니다.');
+          }
+
+          if (
+            previousRun.status === 'queued' ||
+            previousRun.status === 'optimizing' ||
+            previousRun.status === 'optimized' ||
+            previousRun.status === 'cloud_pending' ||
+            previousRun.status === 'restoring'
+          ) {
+            throw new Error('아직 진행 중인 실행은 다시 시작할 수 없습니다.');
+          }
+
+          const sourceMessage = await tx.messages.getById(previousRun.messageId);
+
+          if (!sourceMessage || sourceMessage.contentKo.trim().length === 0) {
+            throw new Error('저장된 한국어 원문이 없어 같은 요청으로 재시도할 수 없습니다.');
+          }
+
+          await tx.runRecords.create({
+            id: nextRunId,
+            taskId: previousRun.taskId,
+            conversationId: previousRun.conversationId,
+            messageId: previousRun.messageId,
+            status: 'queued',
+            provider: previousRun.provider,
+            model: previousRun.model,
+            mode: previousRun.mode,
+            startedAt: createdAt,
+            endedAt: null,
+            errorCode: null,
           });
-      }
+
+          await tx.runStages.create({
+            id: nextStageId,
+            runId: nextRunId,
+            stage: 'queued',
+            status: 'pending',
+            startedAt: createdAt,
+            endedAt: null,
+            details: {
+              source: 'retry-run',
+              retrySourceRunId: request.runId,
+              contentLength: sourceMessage.contentKo.length,
+              storedBeforeExecution: true,
+            },
+          });
+
+          await tx.tasks.updateActivity({
+            taskId: previousRun.taskId,
+            updatedAt: createdAt,
+            lastActivityAt: createdAt,
+          });
+        });
+
+        return {
+          runId: nextRunId,
+          acceptedStatus: 'queued' as const,
+        };
+      });
+
+      queueBackgroundOptimization(result.runId);
 
       return result;
     },
