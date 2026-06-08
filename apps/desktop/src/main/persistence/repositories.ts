@@ -95,6 +95,7 @@ type UsageRecordRow = {
   estimated_cost_with_optimization: number;
   pricing_version: string;
   latency_ms: number;
+  is_estimated: number;
 };
 
 type SqlPrimitive = string | number | null;
@@ -242,6 +243,7 @@ function mapUsageRecordRow(row: UsageRecordRow | null): UsageRecord | null {
     estimatedCostWithOptimization: row.estimated_cost_with_optimization,
     pricingVersion: row.pricing_version,
     latencyMs: row.latency_ms,
+    isEstimated: row.is_estimated === 1,
   };
 }
 
@@ -536,7 +538,8 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
             estimated_cost_without_optimization,
             estimated_cost_with_optimization,
             pricing_version,
-            latency_ms
+            latency_ms,
+            is_estimated
           ) VALUES (
             ${sqlValue(input.id)},
             ${sqlValue(input.runId)},
@@ -546,7 +549,8 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
             ${sqlValue(input.estimatedCostWithoutOptimization)},
             ${sqlValue(input.estimatedCostWithOptimization)},
             ${sqlValue(input.pricingVersion)},
-            ${sqlValue(input.latencyMs)}
+            ${sqlValue(input.latencyMs)},
+            ${sqlValue(input.isEstimated ? 1 : 0)}
           );
         `);
 

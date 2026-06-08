@@ -117,7 +117,8 @@ const coreSchemaMigrations: SchemaMigration[] = [
         estimated_cost_without_optimization REAL NOT NULL,
         estimated_cost_with_optimization REAL NOT NULL,
         pricing_version TEXT NOT NULL,
-        latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0)
+        latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0),
+        is_estimated INTEGER NOT NULL CHECK (is_estimated IN (0, 1))
       );
     `,
   },
@@ -134,6 +135,50 @@ const desktopSchemaMigrations: SchemaMigration[] = [
         value_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+    `,
+  },
+  {
+    id: 3,
+    name: 'usage_record_estimate_flag',
+    sql: `
+      CREATE TABLE IF NOT EXISTS usage_records_v3 (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE REFERENCES run_records(id) ON DELETE CASCADE,
+        baseline_input_tokens INTEGER NOT NULL CHECK (baseline_input_tokens >= 0),
+        optimized_input_tokens INTEGER NOT NULL CHECK (optimized_input_tokens >= 0),
+        output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+        estimated_cost_without_optimization REAL NOT NULL,
+        estimated_cost_with_optimization REAL NOT NULL,
+        pricing_version TEXT NOT NULL,
+        latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0),
+        is_estimated INTEGER NOT NULL CHECK (is_estimated IN (0, 1))
+      );
+      INSERT INTO usage_records_v3 (
+        id,
+        run_id,
+        baseline_input_tokens,
+        optimized_input_tokens,
+        output_tokens,
+        estimated_cost_without_optimization,
+        estimated_cost_with_optimization,
+        pricing_version,
+        latency_ms,
+        is_estimated
+      )
+      SELECT
+        id,
+        run_id,
+        baseline_input_tokens,
+        optimized_input_tokens,
+        output_tokens,
+        estimated_cost_without_optimization,
+        estimated_cost_with_optimization,
+        pricing_version,
+        latency_ms,
+        1
+      FROM usage_records;
+      DROP TABLE usage_records;
+      ALTER TABLE usage_records_v3 RENAME TO usage_records;
     `,
   },
 ];

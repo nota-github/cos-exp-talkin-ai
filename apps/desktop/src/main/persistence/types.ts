@@ -129,6 +129,7 @@ export type UsageRecord = {
   estimatedCostWithOptimization: number;
   pricingVersion: string;
   latencyMs: number;
+  isEstimated: boolean;
 };
 
 export type CreateTaskInput = TaskRecord;
