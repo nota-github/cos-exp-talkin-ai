@@ -236,6 +236,13 @@ export type CreateProjectInput = ProjectRecord;
 export type CreateWorkbenchLayoutInput = WorkbenchLayoutRecord;
 export type CreateFileAssetInput = FileAssetRecord;
 export type UpdateFileAssetInput = FileAssetRecord;
+export type UpdateProjectInput = {
+  projectId: string;
+  name: string;
+  description: string;
+  goal: string;
+  updatedAt: string;
+};
 
 export type UpdateRunRecordStatusInput = {
   runId: string;
@@ -328,6 +335,7 @@ export interface UsageRecordRepository {
 export interface ProjectRepository {
   create(input: CreateProjectInput): Promise<ProjectRecord>;
   getById(projectId: string): Promise<ProjectRecord | null>;
+  update(input: UpdateProjectInput): Promise<ProjectRecord | null>;
   list(): Promise<ProjectListItem[]>;
   getDetail(projectId: string): Promise<ProjectDetailRecord | null>;
 }

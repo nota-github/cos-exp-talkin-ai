@@ -3,9 +3,10 @@ import {
   ipcChannels,
   queryNames,
   type AppSettings,
-  type ChatFeedMessage,
   type BoardColumnsResult,
+  type ChatFeedMessage,
   type ChatFeedRunSummary,
+  type CreateProjectResult,
   type DesktopCommandName,
   type DesktopCommandRequest,
   type DesktopCommandResponse,
@@ -18,7 +19,11 @@ import {
   type InvalidationTarget,
   type PanelSlot,
   type ProjectDetailResult,
+  type ProjectListResult,
+  type ProjectTaskSummary,
+  type SetTaskProjectResult,
   type TaskStatus,
+  type UpdateProjectResult,
   type UsageDashboardResult,
   type WorkbenchPanel,
   type WorkbenchLayoutResult,
@@ -30,6 +35,7 @@ import {
 import type { BoardService } from '../board/index.ts';
 import type { ChatHistoryService } from '../chat/index.ts';
 import type { HistoryInspectionService } from '../history/index.ts';
+import type { ProjectService } from '../projects/index.ts';
 import {
   createInMemoryAppSettingsService,
   defaultAppSettings,
@@ -44,8 +50,9 @@ type InternalTaskRecord = {
   conversationId: string;
   title: string;
   preview: string;
-  projectId: string;
+  projectId: string | null;
   projectName: string;
+  sourceScreen: 'chat' | 'workbench' | 'projects' | 'kanban';
   status: TaskStatus;
   model: AppSettings['defaultModel'];
   mode: AppSettings['optimizationMode'];
@@ -62,11 +69,20 @@ type InternalWorkbenchLayout = {
   panels: WorkbenchPanel[];
 };
 
+type InternalProjectRecord = {
+  projectId: string;
+  name: string;
+  description: string;
+  goal: string;
+  updatedAt: string;
+  files: string[];
+};
+
 type DesktopIpcState = {
   chatFeed: DesktopQueryResponse<'getChatFeed'>;
   workbenchLayout: InternalWorkbenchLayout;
   boardColumns: BoardColumnsResult;
-  projects: Record<string, ProjectDetailResult>;
+  projects: Record<string, InternalProjectRecord>;
   usageDashboards: Record<'month' | 'all_time', UsageDashboardResult>;
   historyEntries: Record<string, HistoryEntryResult>;
   tasks: Record<string, InternalTaskRecord>;
@@ -110,6 +126,7 @@ export type RegisterDesktopIpcOptions = {
   ) => Promise<void> | void;
   state?: DesktopIpcState;
   historyInspectionService?: HistoryInspectionService;
+  projectService?: ProjectService;
   settingsService?: AppSettingsService;
   translationAdapter?: TranslationMcpAdapter;
   usageDashboardService?: UsageDashboardService;
@@ -158,6 +175,42 @@ function clone<TValue>(value: TValue): TValue {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function formatRelativeActivity(activityAt: string, requestedAt = nowIso()) {
+  const diffMs = Math.max(0, new Date(requestedAt).getTime() - new Date(activityAt).getTime());
+  const diffMinutes = Math.floor(diffMs / 60_000);
+
+  if (diffMinutes < 1) {
+    return '방금';
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}분 전`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  if (diffHours < 24) {
+    return `${diffHours}시간 전`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffDays < 7) {
+    return `${diffDays}일 전`;
+  }
+
+  const [year, month, day] = activityAt.slice(0, 10).split('-');
+  return `${year}.${month}.${day}`;
+}
+
+function getEffectiveProjectActivityAt(updatedAt: string, lastTaskActivityAt: string | null) {
+  if (!lastTaskActivityAt) {
+    return updatedAt;
+  }
+
+  return updatedAt > lastTaskActivityAt ? updatedAt : lastTaskActivityAt;
 }
 
 function markTaskActivity(task: InternalTaskRecord, activityAt = nowIso()) {
@@ -294,6 +347,7 @@ function createInitialState(): DesktopIpcState {
     preview: '제품 개요와 시장 진입 전략이 보이는 목차부터 정리해줘.',
     projectId: 'project-001',
     projectName: '사업계획서',
+    sourceScreen: 'chat',
     status: 'in_progress',
     model: 'claude-sonnet-4',
     mode: 'quality',
@@ -310,6 +364,7 @@ function createInitialState(): DesktopIpcState {
     preview: '긴 PDF 핵심만 7개 항목으로 묶어줘.',
     projectId: 'project-002',
     projectName: '제품 리서치',
+    sourceScreen: 'chat',
     status: 'ai_review',
     model: 'gpt-4.1',
     mode: 'long_context',
@@ -326,6 +381,7 @@ function createInitialState(): DesktopIpcState {
     preview: '톤은 부드럽게 유지하고 핵심 일정은 더 또렷하게.',
     projectId: 'project-003',
     projectName: '운영 공지',
+    sourceScreen: 'chat',
     status: 'planning',
     model: 'gemini-1.5-pro',
     mode: 'balanced',
@@ -424,42 +480,24 @@ function createInitialState(): DesktopIpcState {
         name: '사업계획서',
         description: '국문 사업계획서와 파트너 제안 문서를 묶는 작업 공간',
         goal: '시장 진입 전략과 수익 모델을 한 흐름으로 정리',
+        updatedAt: '2026-06-08T00:58:00.000Z',
         files: ['partner-brief.pdf', 'pricing-notes.docx'],
-        tasks: [
-          {
-            taskId: primaryTask.taskId,
-            title: primaryTask.title,
-            status: primaryTask.status,
-          },
-        ],
       },
       'project-002': {
         projectId: 'project-002',
         name: '제품 리서치',
         description: '장문 자료 요약과 비교 분석을 관리하는 프로젝트',
         goal: '핵심 경쟁사 포지셔닝을 1페이지 요약으로 축약',
+        updatedAt: '2026-06-08T00:54:00.000Z',
         files: ['research-pack.pdf'],
-        tasks: [
-          {
-            taskId: researchTask.taskId,
-            title: researchTask.title,
-            status: researchTask.status,
-          },
-        ],
       },
       'project-003': {
         projectId: 'project-003',
         name: '운영 공지',
         description: '사용자-facing 운영 메시지와 카피 수정',
         goal: '짧지만 오해 없는 공지 톤 정리',
+        updatedAt: '2026-06-08T01:09:00.000Z',
         files: [],
-        tasks: [
-          {
-            taskId: polishTask.taskId,
-            title: polishTask.title,
-            status: polishTask.status,
-          },
-        ],
       },
     },
     usageDashboards: {
@@ -582,6 +620,89 @@ function buildWorkbenchLayoutFromState(state: DesktopIpcState): WorkbenchLayoutR
   };
 }
 
+function buildProjectTaskSummaries(
+  state: DesktopIpcState,
+  projectId: string,
+): ProjectTaskSummary[] {
+  return Object.values(state.tasks)
+    .filter((task) => task.projectId === projectId)
+    .sort((left, right) =>
+      right.lastActivityAt.localeCompare(left.lastActivityAt) || right.taskId.localeCompare(left.taskId),
+    )
+    .map((task) => ({
+      taskId: task.taskId,
+      title: task.title,
+      status: task.status,
+      lastActivity: task.lastActivity,
+      lastActivityAt: task.lastActivityAt,
+    }));
+}
+
+function buildProjectDetailFromState(
+  state: DesktopIpcState,
+  projectId: string,
+): ProjectDetailResult {
+  const project = ensureProject(state, projectId);
+
+  return {
+    projectId: project.projectId,
+    name: project.name,
+    description: project.description,
+    goal: project.goal,
+    updatedAt: project.updatedAt,
+    files: [...project.files],
+    tasks: buildProjectTaskSummaries(state, projectId),
+  };
+}
+
+function buildProjectListFromState(state: DesktopIpcState): ProjectListResult {
+  const projects = Object.values(state.projects)
+    .map((project) => {
+      const taskSummaries = buildProjectTaskSummaries(state, project.projectId);
+      const lastActivityAt = getEffectiveProjectActivityAt(
+        project.updatedAt,
+        taskSummaries[0]?.lastActivityAt ?? null,
+      );
+
+      return {
+        projectId: project.projectId,
+        name: project.name,
+        description: project.description,
+        goal: project.goal,
+        taskCount: taskSummaries.length,
+        fileCount: project.files.length,
+        updatedAt: project.updatedAt,
+        lastActivityAt,
+        lastActivity: formatRelativeActivity(lastActivityAt),
+      };
+    })
+    .sort((left, right) =>
+      right.lastActivityAt.localeCompare(left.lastActivityAt) ||
+      right.updatedAt.localeCompare(left.updatedAt) ||
+      right.projectId.localeCompare(left.projectId),
+    );
+
+  const recentTasks = Object.values(state.tasks)
+    .sort((left, right) =>
+      right.lastActivityAt.localeCompare(left.lastActivityAt) || right.taskId.localeCompare(left.taskId),
+    )
+    .map((task) => ({
+      taskId: task.taskId,
+      title: task.title,
+      status: task.status,
+      projectId: task.projectId,
+      projectName: task.projectId ? task.projectName : null,
+      sourceScreen: task.sourceScreen,
+      lastActivity: task.lastActivity,
+      lastActivityAt: task.lastActivityAt,
+    }));
+
+  return {
+    projects,
+    recentTasks,
+  };
+}
+
 function getInMemoryNextActiveWorkbenchSlot(panels: WorkbenchPanel[]): PanelSlot | null {
   return panels.find((panel) => panel.taskId !== null)?.slot ?? null;
 }
@@ -618,9 +739,9 @@ function stageSubmittedPromptInState(
     runId: string;
   },
 ) {
-  const projectId = request.projectId ?? 'project-001';
+  const projectId = request.projectId ?? null;
   const usageCategory = request.projectId ? 'project_linked' : 'general';
-  const project = ensureProject(draftState, projectId);
+  const project = projectId ? ensureProject(draftState, projectId) : null;
   const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
   const activityAt = nowIso();
   const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
@@ -652,7 +773,8 @@ function stageSubmittedPromptInState(
     title,
     preview: request.promptKo,
     projectId,
-    projectName: project.name,
+    projectName: project?.name ?? '개인 작업',
+    sourceScreen: 'chat',
     status: 'planning',
     model: request.selectedModel,
     mode: request.optimizationMode,
@@ -661,12 +783,6 @@ function stageSubmittedPromptInState(
     lastActivityAt: activityAt,
     toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
   };
-
-  project.tasks.unshift({
-    taskId: ids.taskId,
-    title,
-    status: 'planning',
-  });
 
   draftState.chatFeed.activeConversationId = ids.conversationId;
   draftState.chatFeed.activeTaskId = ids.taskId;
@@ -769,6 +885,97 @@ function stageRetriedRunInState(
   };
 }
 
+function stageCreatedProjectInState(
+  draftState: DesktopIpcState,
+  request: DesktopCommandRequest<'createProject'>,
+  result: CreateProjectResult,
+  updatedAt: string,
+) {
+  draftState.projects[result.projectId] = {
+    projectId: result.projectId,
+    name: request.name.trim(),
+    description: request.description.trim(),
+    goal: request.goal.trim(),
+    updatedAt,
+    files: [],
+  };
+}
+
+function stageUpdatedProjectInState(
+  draftState: DesktopIpcState,
+  request: DesktopCommandRequest<'updateProject'>,
+  result: UpdateProjectResult,
+) {
+  const project = ensureProject(draftState, request.projectId);
+  const nextName = request.name.trim();
+
+  project.name = nextName;
+  project.description = request.description.trim();
+  project.goal = request.goal.trim();
+  project.updatedAt = result.updatedAt;
+
+  for (const task of Object.values(draftState.tasks)) {
+    if (task.projectId === request.projectId) {
+      task.projectName = nextName;
+    }
+  }
+
+  draftState.workbenchLayout.panels = draftState.workbenchLayout.panels.map((panel) => {
+    if (!panel.taskId) {
+      return panel;
+    }
+
+    const task = draftState.tasks[panel.taskId];
+
+    if (!task || task.projectId !== request.projectId) {
+      return panel;
+    }
+
+    return {
+      ...panel,
+      note: `최근 활동 ${task.lastActivity} · ${task.projectName}`,
+    };
+  });
+
+  draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
+  draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
+}
+
+function stageSetTaskProjectInState(
+  draftState: DesktopIpcState,
+  result: SetTaskProjectResult,
+  updatedAt: string,
+) {
+  const task = ensureTask(draftState, result.taskId);
+  const previousProjectId = task.projectId;
+  const nextProject = result.projectId ? ensureProject(draftState, result.projectId) : null;
+
+  task.projectId = result.projectId;
+  task.projectName = nextProject?.name ?? '개인 작업';
+  markTaskActivity(task, updatedAt);
+
+  if (previousProjectId) {
+    const previousProject = ensureProject(draftState, previousProjectId);
+    previousProject.updatedAt = updatedAt;
+  }
+
+  if (nextProject) {
+    nextProject.updatedAt = updatedAt;
+  }
+
+  draftState.workbenchLayout.panels = draftState.workbenchLayout.panels.map((panel) =>
+    panel.taskId === task.taskId
+      ? {
+          ...panel,
+          note: `최근 활동 ${task.lastActivity} · ${task.projectName}`,
+        }
+      : panel,
+  );
+
+  draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
+  draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
+}
+
 function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardColumnsResult {
   return {
     columns: (Object.keys(boardColumnTitles) as TaskStatus[]).map((status) => ({
@@ -781,7 +988,7 @@ function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardCo
           conversationId: task.conversationId,
           title: task.title,
           status: task.status,
-          projectName: task.projectName,
+          projectName: task.projectId ? task.projectName : '프로젝트 미지정',
           lastActivity: task.lastActivity,
           lastActivityAt: task.lastActivityAt,
           toolSummary: task.toolSummary,
@@ -849,6 +1056,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   const boardService = options.boardService ?? null;
   const chatHistoryService = options.chatHistoryService ?? null;
   const historyInspectionService = options.historyInspectionService ?? null;
+  const projectService = options.projectService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
   const translationAdapter = options.translationAdapter ?? null;
   const usageDashboardService = options.usageDashboardService ?? null;
@@ -1067,6 +1275,248 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
           ],
         };
       }),
+    createProject: async (request) =>
+      commitCommandMutation('createProject', async (draftState) => {
+        if (!request.name.trim()) {
+          throw new Error('프로젝트 이름을 입력해 주세요.');
+        }
+
+        const updatedAt = nowIso();
+
+        if (projectService) {
+          return {
+            commit: async () => {
+              const result = await projectService.createProject(request);
+              stageCreatedProjectInState(draftState, request, result, updatedAt);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'project',
+                ids: [],
+              },
+              {
+                kind: 'projection',
+                projection: 'projectList',
+              },
+            ],
+          };
+        }
+
+        const projectId = `project-${String(Object.keys(draftState.projects).length + 1).padStart(3, '0')}`;
+        stageCreatedProjectInState(
+          draftState,
+          request,
+          {
+            projectId,
+          },
+          updatedAt,
+        );
+
+        return {
+          result: {
+            projectId,
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'project',
+              ids: [projectId],
+            },
+            {
+              kind: 'projection',
+              projection: 'projectList',
+            },
+          ],
+        };
+      }),
+    updateProject: async (request) =>
+      commitCommandMutation('updateProject', async (draftState) => {
+        if (!request.name.trim()) {
+          throw new Error('프로젝트 이름을 입력해 주세요.');
+        }
+
+        const updatedAt = nowIso();
+
+        if (projectService) {
+          return {
+            commit: async () => {
+              const result = await projectService.updateProject(request);
+              stageUpdatedProjectInState(draftState, request, result);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'project',
+                ids: [request.projectId],
+              },
+              {
+                kind: 'projection',
+                projection: 'projectList',
+              },
+              {
+                kind: 'projection',
+                projection: 'projectDetail',
+                keys: [request.projectId],
+              },
+              {
+                kind: 'projection',
+                projection: 'boardColumns',
+              },
+              {
+                kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+            ],
+          };
+        }
+
+        const result = {
+          projectId: request.projectId,
+          updatedAt,
+        };
+        stageUpdatedProjectInState(draftState, request, result);
+
+        return {
+          result,
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'project',
+              ids: [request.projectId],
+            },
+            {
+              kind: 'projection',
+              projection: 'projectList',
+            },
+            {
+              kind: 'projection',
+              projection: 'projectDetail',
+              keys: [request.projectId],
+            },
+            {
+              kind: 'projection',
+              projection: 'boardColumns',
+            },
+            {
+              kind: 'projection',
+              projection: 'workbenchLayout',
+            },
+          ],
+        };
+      }),
+    setTaskProject: async (request) =>
+      commitCommandMutation('setTaskProject', async (draftState) => {
+        const previousProjectId = ensureTask(draftState, request.taskId).projectId;
+        const updatedAt = nowIso();
+
+        if (projectService) {
+          const affectedProjectIds = Array.from(
+            new Set(
+              [previousProjectId, request.projectId].filter(
+                (projectId): projectId is string => projectId !== null,
+              ),
+            ),
+          );
+
+          return {
+            commit: async () => {
+              const result = await projectService.setTaskProject(request);
+              stageSetTaskProjectInState(draftState, result, updatedAt);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'task',
+                ids: [request.taskId],
+              },
+              {
+                kind: 'entity',
+                entity: 'project',
+                ids: affectedProjectIds,
+              },
+              {
+                kind: 'projection',
+                projection: 'projectList',
+              },
+              {
+                kind: 'projection',
+                projection: 'boardColumns',
+              },
+              {
+                kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+              ...affectedProjectIds
+                .map(
+                  (projectId) =>
+                    ({
+                      kind: 'projection',
+                      projection: 'projectDetail',
+                      keys: [projectId],
+                    }) satisfies InvalidationTarget,
+                ),
+            ],
+          };
+        }
+
+        const result = {
+          taskId: request.taskId,
+          projectId: request.projectId,
+          previousProjectId,
+        };
+        const affectedProjectIds = Array.from(
+          new Set(
+            [previousProjectId, request.projectId].filter(
+              (projectId): projectId is string => projectId !== null,
+            ),
+          ),
+        );
+        stageSetTaskProjectInState(draftState, result, updatedAt);
+
+        return {
+          result,
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'task',
+              ids: [request.taskId],
+            },
+            {
+              kind: 'entity',
+              entity: 'project',
+              ids: affectedProjectIds,
+            },
+            {
+              kind: 'projection',
+              projection: 'projectList',
+            },
+            {
+              kind: 'projection',
+              projection: 'boardColumns',
+            },
+            {
+              kind: 'projection',
+              projection: 'workbenchLayout',
+            },
+            ...affectedProjectIds
+              .map(
+                (projectId) =>
+                  ({
+                    kind: 'projection',
+                    projection: 'projectDetail',
+                    keys: [projectId],
+                  }) satisfies InvalidationTarget,
+              ),
+          ],
+        };
+      }),
     openInWorkbench: async (request) =>
       commitCommandMutation('openInWorkbench', async (draftState) => {
         if (workbenchService) {
@@ -1261,21 +1711,11 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         }
 
         const task = ensureTask(draftState, request.taskId);
-        const project = ensureProject(draftState, task.projectId);
 
         task.status = request.status;
         markTaskActivity(task);
         draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
         draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
-
-        project.tasks = project.tasks.map((projectTask) =>
-          projectTask.taskId === request.taskId
-            ? {
-                ...projectTask,
-                status: request.status,
-              }
-            : projectTask,
-        );
 
         draftState.workbenchLayout.panels = draftState.workbenchLayout.panels.map((panel) =>
           panel.taskId === request.taskId
@@ -1301,11 +1741,15 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               kind: 'projection',
               projection: 'boardColumns',
             },
-            {
-              kind: 'projection',
-              projection: 'projectDetail',
-              keys: [project.projectId],
-            },
+            ...(task.projectId
+              ? ([
+                  {
+                    kind: 'projection',
+                    projection: 'projectDetail',
+                    keys: [task.projectId],
+                  },
+                ] satisfies InvalidationTarget[])
+              : []),
           ],
         };
       }),
@@ -1353,7 +1797,14 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       boardService
         ? boardService.getBoardColumns({})
         : clone(state.boardColumns),
-    getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
+    getProjectList: async () =>
+      projectService
+        ? projectService.getProjectList({})
+        : clone(buildProjectListFromState(state)),
+    getProjectDetail: async (request) =>
+      projectService
+        ? projectService.getProjectDetail(request)
+        : clone(buildProjectDetailFromState(state, request.projectId)),
     getUsageDashboard: async (request) =>
       usageDashboardService
         ? usageDashboardService.getUsageDashboard(request)

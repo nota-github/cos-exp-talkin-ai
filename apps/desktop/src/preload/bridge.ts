@@ -49,6 +49,9 @@ export function createTalkinAIDesktopApi(
       commands: {
         submitPrompt: (request) => invokeCommand(ipcRenderer, 'submitPrompt', request),
         retryRun: (request) => invokeCommand(ipcRenderer, 'retryRun', request),
+        createProject: (request) => invokeCommand(ipcRenderer, 'createProject', request),
+        updateProject: (request) => invokeCommand(ipcRenderer, 'updateProject', request),
+        setTaskProject: (request) => invokeCommand(ipcRenderer, 'setTaskProject', request),
         openInWorkbench: (request) => invokeCommand(ipcRenderer, 'openInWorkbench', request),
         moveWorkbenchPanel: (request) =>
           invokeCommand(ipcRenderer, 'moveWorkbenchPanel', request),
@@ -61,6 +64,7 @@ export function createTalkinAIDesktopApi(
         getChatFeed: (request) => invokeQuery(ipcRenderer, 'getChatFeed', request),
         getWorkbenchLayout: (request) => invokeQuery(ipcRenderer, 'getWorkbenchLayout', request),
         getBoardColumns: (request) => invokeQuery(ipcRenderer, 'getBoardColumns', request),
+        getProjectList: (request) => invokeQuery(ipcRenderer, 'getProjectList', request),
         getProjectDetail: (request) => invokeQuery(ipcRenderer, 'getProjectDetail', request),
         getUsageDashboard: (request) => invokeQuery(ipcRenderer, 'getUsageDashboard', request),
         getHistoryFeed: (request) => invokeQuery(ipcRenderer, 'getHistoryFeed', request),

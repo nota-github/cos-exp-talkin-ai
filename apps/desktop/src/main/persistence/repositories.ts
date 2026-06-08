@@ -922,6 +922,19 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
         return mapProjectRow(firstOrNull(rows));
       },
 
+      async update(input) {
+        await connection.exec(`
+          UPDATE projects
+          SET name = ${sqlValue(input.name)},
+              description = ${sqlValue(input.description)},
+              goal = ${sqlValue(input.goal)},
+              updated_at = ${sqlValue(input.updatedAt)}
+          WHERE id = ${sqlValue(input.projectId)};
+        `);
+
+        return this.getById(input.projectId);
+      },
+
       async list() {
         const rows = await connection.query<ProjectListRow>(`
           SELECT
@@ -938,7 +951,13 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
           LEFT JOIN tasks t ON t.project_id = p.id
           LEFT JOIN file_assets f ON f.project_id = p.id
           GROUP BY p.id
-          ORDER BY COALESCE(MAX(t.last_activity_at), p.updated_at) DESC, p.updated_at DESC;
+          ORDER BY
+            CASE
+              WHEN MAX(t.last_activity_at) IS NULL OR p.updated_at > MAX(t.last_activity_at)
+                THEN p.updated_at
+              ELSE MAX(t.last_activity_at)
+            END DESC,
+            p.updated_at DESC;
         `);
 
         return rows.map((row) => mapProjectListRow(row));
