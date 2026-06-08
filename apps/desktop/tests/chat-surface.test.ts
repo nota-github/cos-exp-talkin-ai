@@ -258,6 +258,33 @@ test('story-3.5:VAL-2, story-3.5:AC-2, and story-3.5:AC-6 failure guidance prefe
   assert.match(providerFailure?.description ?? '', /다른 모델/);
 });
 
+test('story-6.3:AC-4 interrupted-after-dispatch feedback requires explicit retry instead of silent auto-resume', () => {
+  const interruptedFeedback = getChatRunFeedback({
+    runId: 'run-304',
+    sourceMessageId: 'msg-304',
+    status: 'failed',
+    stage: 'failed',
+    model: 'gpt-4.1',
+    mode: 'quality',
+    errorCode: 'interrupted_after_dispatch',
+    failure: {
+      failedStage: 'cloud_pending',
+      message: '앱이 클라우드 응답 처리 중 닫혀 자동 재개하지 않았습니다.',
+      guidance:
+        '같은 한국어 원문은 유지됩니다. 중복 청구 가능성을 피하려면 내용을 확인한 뒤 명시적으로 다시 시도하세요.',
+      retryable: true,
+    },
+  });
+
+  assert.equal(interruptedFeedback?.title, '모델 응답 단계에서 멈췄습니다');
+  assert.deepEqual(interruptedFeedback?.actions.map(getRunFeedbackActionLabel), [
+    '재시도',
+    '다른 모델 선택',
+  ]);
+  assert.match(interruptedFeedback?.description ?? '', /명시적으로 다시 시도/);
+  assert.match(interruptedFeedback?.detail ?? '', /중복 청구 가능성/);
+});
+
 test('story-3.5:AC-3 source exposes retry, settings, and same-prompt model-switch actions without a log-panel layout', () => {
   const sourceMessage = resolveSourceMessageForRun(
     [

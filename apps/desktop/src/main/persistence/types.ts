@@ -317,6 +317,7 @@ export interface RunRecordRepository {
   create(input: CreateRunRecordInput): Promise<RunRecord>;
   getById(runId: string): Promise<RunRecord | null>;
   listByConversation(conversationId: string): Promise<RunRecord[]>;
+  listByStatuses(statuses: RunStatus[]): Promise<RunRecord[]>;
   updateStatus(input: UpdateRunRecordStatusInput): Promise<RunRecord | null>;
 }
 

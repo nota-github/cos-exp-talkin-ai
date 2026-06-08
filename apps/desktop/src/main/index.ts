@@ -16,6 +16,7 @@ import { createPersistentWorkbenchService } from './workbench/index.ts';
 import { createMainWindowOptions } from './window-config';
 import {
   createPersistentOptimizationStageOrchestrator,
+  createPersistentRestartRecoveryService,
   createPersistentResponseCompletionOrchestrator,
 } from './workflows/index.ts';
 import { createPersistentUsageDashboardService } from './usage/index.ts';
@@ -72,6 +73,11 @@ function registerIpcHandlers() {
       return responseCompletionOrchestrator.completeOptimizedRun(input);
     },
   });
+  const restartRecoveryService = createPersistentRestartRecoveryService({
+    dbPath,
+    optimizationStageOrchestrator,
+    responseCompletionOrchestrator,
+  });
 
   registerDesktopIpcHandlers(ipcMain, {
     broadcast: (channel, payload) => {
@@ -91,6 +97,10 @@ function registerIpcHandlers() {
     translationAdapter,
     usageDashboardService,
     workbenchService,
+  });
+
+  void restartRecoveryService.recoverInterruptedRuns().catch((error) => {
+    console.error('Talkin AI restart recovery failed.', error);
   });
 
   ipcHandlersRegistered = true;
