@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createPersistentBoardService } from './board/index.ts';
 import { createPersistentChatHistoryService } from './chat/index.ts';
 import { createPersistentHistoryInspectionService } from './history/index.ts';
+import { createDesktopInvalidationEmitter } from './ipc/invalidation.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createPersistentSecretService } from './keychain/index.ts';
 import { createCloudInferenceGateway } from './providers/index.ts';
@@ -24,6 +25,12 @@ import { createPersistentUsageDashboardService } from './usage/index.ts';
 let mainWindow: BrowserWindow | null = null;
 let ipcHandlersRegistered = false;
 
+function broadcastDesktopEvent(channel: string, payload: unknown) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(channel, payload);
+  }
+}
+
 function registerIpcHandlers() {
   if (ipcHandlersRegistered) {
     return;
@@ -32,6 +39,9 @@ function registerIpcHandlers() {
   const dbPath = join(app.getPath('userData'), 'talkin-ai.db');
   const settingsService = createPersistentAppSettingsService({
     dbPath,
+  });
+  const invalidationEmitter = createDesktopInvalidationEmitter({
+    broadcast: broadcastDesktopEvent,
   });
   const usageDashboardService = createPersistentUsageDashboardService({
     dbPath,
@@ -65,10 +75,28 @@ function registerIpcHandlers() {
     cloudInferenceGateway,
     translationAdapter,
     settingsService,
+    emitInvalidation(targets) {
+      invalidationEmitter.emit(
+        {
+          type: 'workflow',
+          name: 'responseCompletion',
+        },
+        targets,
+      );
+    },
   });
   const optimizationStageOrchestrator = createPersistentOptimizationStageOrchestrator({
     dbPath,
     translationAdapter,
+    emitInvalidation(targets) {
+      invalidationEmitter.emit(
+        {
+          type: 'workflow',
+          name: 'optimizationStage',
+        },
+        targets,
+      );
+    },
     dispatchOptimizedRun(input) {
       return responseCompletionOrchestrator.completeOptimizedRun(input);
     },
@@ -77,14 +105,19 @@ function registerIpcHandlers() {
     dbPath,
     optimizationStageOrchestrator,
     responseCompletionOrchestrator,
+    emitInvalidation(targets) {
+      invalidationEmitter.emit(
+        {
+          type: 'workflow',
+          name: 'restartRecovery',
+        },
+        targets,
+      );
+    },
   });
 
   registerDesktopIpcHandlers(ipcMain, {
-    broadcast: (channel, payload) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send(channel, payload);
-      }
-    },
+    broadcast: broadcastDesktopEvent,
     boardService,
     chatHistoryService: createPersistentChatHistoryService({
       dbPath,

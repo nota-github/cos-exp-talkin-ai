@@ -18,6 +18,7 @@ import type {
   TranslationMcpRuntimeError,
 } from '../translation/index.ts';
 import { normalizeOptimizePromptInputForTranslationMcp } from '../translation/index.ts';
+import { buildTaskProjectionInvalidationTargets } from '../ipc/invalidation.ts';
 import { buildPreservationInput, estimateTokenCount } from './run-helpers.ts';
 
 type OrchestratorCreateId = (prefix: string) => string;
@@ -60,6 +61,7 @@ export type CreatePersistentOptimizationStageOrchestratorOptions = {
   translationAdapter: TranslationMcpAdapter;
   now?: () => string;
   createId?: OrchestratorCreateId;
+  emitInvalidation?: (targets: ReturnType<typeof buildTaskProjectionInvalidationTargets>) => void;
   dispatchOptimizedRun?: (
     input: OptimizationDispatchInput,
   ) => Promise<void> | void;
@@ -155,7 +157,7 @@ export function createPersistentOptimizationStageOrchestrator(
   ) {
     const failedAt = now();
 
-    await persistence.transaction(async (tx) => {
+    const invalidationContext = await persistence.transaction(async (tx) => {
       const updatedRun = await tx.runRecords.updateStatus({
         runId: input.runId,
         status: 'failed',
@@ -185,14 +187,27 @@ export function createPersistentOptimizationStageOrchestrator(
           lastActivityAt: failedAt,
         });
       }
+
+      return {
+        taskId: taskId ?? null,
+        conversationId: updatedRun?.conversationId ?? null,
+      };
     });
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: invalidationContext.taskId,
+        conversationId: invalidationContext.conversationId,
+        runId: input.runId,
+      }),
+    );
   }
 
   async function claimQueuedRun(
     persistence: ChatRunPersistence,
     runId: string,
   ): Promise<ClaimedQueuedRun | OptimizationStageResult> {
-    return persistence.transaction(async (tx) => {
+    const claimedRun = await persistence.transaction(async (tx) => {
       const run = await tx.runRecords.getById(runId);
 
       if (!run) {
@@ -285,6 +300,32 @@ export function createPersistentOptimizationStageOrchestrator(
         },
       } satisfies ClaimedQueuedRun;
     });
+
+    if ('status' in claimedRun) {
+      if (claimedRun.status === 'failed') {
+        const run = await persistence.runRecords.getById(runId);
+
+        options.emitInvalidation?.(
+          buildTaskProjectionInvalidationTargets({
+            taskId: run?.taskId ?? null,
+            conversationId: run?.conversationId ?? null,
+            runId,
+          }),
+        );
+      }
+
+      return claimedRun;
+    }
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: claimedRun.run.taskId,
+        conversationId: claimedRun.run.conversationId,
+        runId,
+      }),
+    );
+
+    return claimedRun;
   }
 
   return {
@@ -373,6 +414,14 @@ export function createPersistentOptimizationStageOrchestrator(
             lastActivityAt: optimizedAt,
           });
         });
+
+        options.emitInvalidation?.(
+          buildTaskProjectionInvalidationTargets({
+            taskId: claimedRun.run.taskId,
+            conversationId: claimedRun.run.conversationId,
+            runId: input.runId,
+          }),
+        );
 
         if (options.dispatchOptimizedRun) {
           await options.dispatchOptimizedRun({
