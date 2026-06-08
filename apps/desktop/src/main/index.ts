@@ -1,8 +1,26 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
+import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createMainWindowOptions } from './window-config';
 
 let mainWindow: BrowserWindow | null = null;
+let ipcHandlersRegistered = false;
+
+function registerIpcHandlers() {
+  if (ipcHandlersRegistered) {
+    return;
+  }
+
+  registerDesktopIpcHandlers(ipcMain, {
+    broadcast: (channel, payload) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(channel, payload);
+      }
+    },
+  });
+
+  ipcHandlersRegistered = true;
+}
 
 function createMainWindow() {
   const preloadPath = join(__dirname, '../preload/index.js');
@@ -24,6 +42,7 @@ function createMainWindow() {
 }
 
 app.whenReady().then(() => {
+  registerIpcHandlers();
   createMainWindow();
 
   app.on('activate', () => {

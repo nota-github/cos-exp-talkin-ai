@@ -9,6 +9,7 @@
     "build": "npm --workspace @talkin-ai/desktop run build",
     "typecheck": "npm --workspace @talkin-ai/desktop run typecheck",
     "test": "npm --workspace @talkin-ai/desktop run test",
-    "validate:story-1.1": "npm --workspace @talkin-ai/desktop run validate:story-1.1"
+    "validate:story-1.1": "npm --workspace @talkin-ai/desktop run validate:story-1.1",
+    "validate:story-1.2": "npm --workspace @talkin-ai/desktop run validate:story-1.2"
   }
 }

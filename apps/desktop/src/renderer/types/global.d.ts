@@ -1,12 +1,9 @@
+import type { TalkinAIDesktopApi } from '../../shared/ipc/contracts';
+
 export {};
 
 declare global {
   interface Window {
-    talkinAI?: {
-      shell: {
-        channel: string;
-        platform: string;
-      };
-    };
+    talkinAI?: TalkinAIDesktopApi;
   }
 }
