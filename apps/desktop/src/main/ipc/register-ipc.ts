@@ -80,6 +80,10 @@ export type DesktopIpcBroadcaster = (channel: string, payload: unknown) => void;
 
 export type RegisterDesktopIpcOptions = {
   broadcast?: DesktopIpcBroadcaster;
+  commitMutation?: (
+    commandName: DesktopCommandName,
+    nextState: DesktopIpcState,
+  ) => Promise<void> | void;
   state?: DesktopIpcState;
   settingsService?: AppSettingsService;
 };
@@ -88,6 +92,18 @@ export type DesktopIpcService = {
   commands: CommandHandlerMap;
   queries: QueryHandlerMap;
 };
+
+type PreparedMutationResult<TResult> =
+  | {
+      result: TResult;
+      targets: InvalidationTarget[];
+      commit?: undefined;
+    }
+  | {
+      commit: () => Promise<TResult> | TResult;
+      targets: InvalidationTarget[];
+      result?: undefined;
+    };
 
 const boardColumnTitles: Record<TaskStatus, string> = {
   planning: '기획',
@@ -397,235 +413,283 @@ function emitInvalidation(
 }
 
 export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {}): DesktopIpcService {
-  const state = options.state ?? createInitialState();
+  let state = clone(options.state ?? createInitialState());
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
 
+  async function resolvePreparedMutationResult<TResult>(
+    outcome: PreparedMutationResult<TResult>,
+  ): Promise<TResult> {
+    if (outcome.commit) {
+      return outcome.commit();
+    }
+
+    return outcome.result;
+  }
+
+  async function commitCommandMutation<TResult>(
+    commandName: DesktopCommandName,
+    work: (
+      draftState: DesktopIpcState,
+    ) => Promise<PreparedMutationResult<TResult>>,
+  ) {
+    const draftState = clone(state);
+    const outcome = await work(draftState);
+
+    await options.commitMutation?.(commandName, draftState);
+    const result = await resolvePreparedMutationResult(outcome);
+
+    state = draftState;
+    emitInvalidation(state, options.broadcast, commandName, outcome.targets);
+
+    return result;
+  }
+
   const commands: CommandHandlerMap = {
-    submitPrompt: async (request) => {
-      const taskId = `task-${String(state.nextIds.task).padStart(3, '0')}`;
-      const conversationId = request.conversationId ?? `conv-${String(state.nextIds.conversation).padStart(3, '0')}`;
-      const messageId = `msg-${String(state.nextIds.message).padStart(3, '0')}`;
-      const runId = `run-${String(state.nextIds.run).padStart(3, '0')}`;
-      const projectId = request.projectId ?? 'project-001';
-      const project = ensureProject(state, projectId);
-      const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
-      const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
-      const tokenOptimized = Math.max(Math.floor(tokenBaseline * 0.61), 170);
-      const savingsRate = Math.round((1 - tokenOptimized / tokenBaseline) * 100);
+    submitPrompt: async (request) =>
+      commitCommandMutation('submitPrompt', async (draftState) => {
+        const taskId = `task-${String(draftState.nextIds.task).padStart(3, '0')}`;
+        const conversationId =
+          request.conversationId ??
+          `conv-${String(draftState.nextIds.conversation).padStart(3, '0')}`;
+        const messageId = `msg-${String(draftState.nextIds.message).padStart(3, '0')}`;
+        const runId = `run-${String(draftState.nextIds.run).padStart(3, '0')}`;
+        const projectId = request.projectId ?? 'project-001';
+        const project = ensureProject(draftState, projectId);
+        const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
+        const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
+        const tokenOptimized = Math.max(Math.floor(tokenBaseline * 0.61), 170);
+        const savingsRate = Math.round((1 - tokenOptimized / tokenBaseline) * 100);
 
-      state.nextIds.task += 1;
-      state.nextIds.conversation += 1;
-      state.nextIds.message += 1;
-      state.nextIds.run += 1;
+        draftState.nextIds.task += 1;
+        draftState.nextIds.conversation += 1;
+        draftState.nextIds.message += 1;
+        draftState.nextIds.run += 1;
 
-      state.tasks[taskId] = {
-        taskId,
-        conversationId,
-        title,
-        preview: request.promptKo,
-        projectId,
-        projectName: project.name,
-        status: 'planning',
-        model: request.selectedModel,
-        mode: request.optimizationMode,
-        savingsRate,
-        lastActivity: '방금',
-        toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
-      };
+        draftState.tasks[taskId] = {
+          taskId,
+          conversationId,
+          title,
+          preview: request.promptKo,
+          projectId,
+          projectName: project.name,
+          status: 'planning',
+          model: request.selectedModel,
+          mode: request.optimizationMode,
+          savingsRate,
+          lastActivity: '방금',
+          toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
+        };
 
-      project.tasks.unshift({
-        taskId,
-        title,
-        status: 'planning',
-      });
+        project.tasks.unshift({
+          taskId,
+          title,
+          status: 'planning',
+        });
 
-      state.chatFeed.activeConversationId = conversationId;
-      state.chatFeed.items = sortTasksForChatFeed(state.tasks);
-      state.boardColumns = rebuildBoardColumns(state.tasks);
+        draftState.chatFeed.activeConversationId = conversationId;
+        draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
+        draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
 
-      state.historyEntries[runId] = {
-        runId,
-        taskId,
-        promptKo: request.promptKo,
-        optimizedPromptEn:
-          'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
-        restoredResponseKo:
-          '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
-        baselineTokens: tokenBaseline,
-        optimizedTokens: tokenOptimized,
-        savingsRate,
-        provider: request.selectedModel,
-      };
+        draftState.historyEntries[runId] = {
+          runId,
+          taskId,
+          promptKo: request.promptKo,
+          optimizedPromptEn:
+            'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
+          restoredResponseKo:
+            '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
+          baselineTokens: tokenBaseline,
+          optimizedTokens: tokenOptimized,
+          savingsRate,
+          provider: request.selectedModel,
+        };
 
-      state.usageDashboards.month.totals.baselineTokens += tokenBaseline;
-      state.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
-      state.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
-      state.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
+        draftState.usageDashboards.month.totals.baselineTokens += tokenBaseline;
+        draftState.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
+        draftState.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
+        draftState.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
 
-      emitInvalidation(state, options.broadcast, 'submitPrompt', [
-        {
-          kind: 'entity',
-          entity: 'task',
-          ids: [taskId],
-        },
-        {
-          kind: 'entity',
-          entity: 'conversation',
-          ids: [conversationId],
-        },
-        {
-          kind: 'entity',
-          entity: 'run',
-          ids: [runId],
-        },
-        {
-          kind: 'projection',
-          projection: 'chatFeed',
-        },
-        {
-          kind: 'projection',
-          projection: 'historyEntry',
-          keys: [runId],
-        },
-      ]);
+        return {
+          result: {
+            taskId,
+            conversationId,
+            messageId,
+            runId,
+            acceptedStatus: 'queued' as const,
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'task',
+              ids: [taskId],
+            },
+            {
+              kind: 'entity',
+              entity: 'conversation',
+              ids: [conversationId],
+            },
+            {
+              kind: 'entity',
+              entity: 'run',
+              ids: [runId],
+            },
+            {
+              kind: 'projection',
+              projection: 'chatFeed',
+            },
+            {
+              kind: 'projection',
+              projection: 'historyEntry',
+              keys: [runId],
+            },
+            {
+              kind: 'projection',
+              projection: 'usageDashboard',
+              keys: ['month', 'all_time'],
+            },
+          ],
+        };
+      }),
+    retryRun: async (request) =>
+      commitCommandMutation('retryRun', async (draftState) => {
+        const entry = ensureHistoryEntry(draftState, request.runId);
 
-      return {
-        taskId,
-        conversationId,
-        messageId,
-        runId,
-        acceptedStatus: 'queued',
-      };
-    },
-    retryRun: async (request) => {
-      const entry = ensureHistoryEntry(state, request.runId);
+        entry.restoredResponseKo = '재시도 요청이 접수되었습니다. 이전 한국어 입력은 그대로 유지됩니다.';
 
-      entry.restoredResponseKo = '재시도 요청이 접수되었습니다. 이전 한국어 입력은 그대로 유지됩니다.';
+        return {
+          result: {
+            runId: request.runId,
+            acceptedStatus: 'queued' as const,
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'run',
+              ids: [request.runId],
+            },
+            {
+              kind: 'projection',
+              projection: 'historyEntry',
+              keys: [request.runId],
+            },
+          ],
+        };
+      }),
+    openInWorkbench: async (request) =>
+      commitCommandMutation('openInWorkbench', async (draftState) => {
+        const task = ensureTask(draftState, request.taskId);
+        const slot =
+          request.panelSlot ??
+          draftState.workbenchLayout.panels.find((panel) => panel.taskId === null)?.slot ??
+          panelSlots[0];
+        const panel = draftState.workbenchLayout.panels.find((currentPanel) => currentPanel.slot === slot);
 
-      emitInvalidation(state, options.broadcast, 'retryRun', [
-        {
-          kind: 'entity',
-          entity: 'run',
-          ids: [request.runId],
-        },
-        {
-          kind: 'projection',
-          projection: 'historyEntry',
-          keys: [request.runId],
-        },
-      ]);
+        if (!panel) {
+          throw new Error(`Unknown panel slot: ${slot}`);
+        }
 
-      return {
-        runId: request.runId,
-        acceptedStatus: 'queued',
-      };
-    },
-    openInWorkbench: async (request) => {
-      const task = ensureTask(state, request.taskId);
-      const slot =
-        request.panelSlot ??
-        state.workbenchLayout.panels.find((panel) => panel.taskId === null)?.slot ??
-        panelSlots[0];
-      const panel = state.workbenchLayout.panels.find((currentPanel) => currentPanel.slot === slot);
+        panel.taskId = task.taskId;
+        panel.title = task.title;
+        panel.status = task.status;
+        panel.note = '작업대에서 이어지는 활성 작업';
+        draftState.workbenchLayout.updatedAt = nowIso();
 
-      if (!panel) {
-        throw new Error(`Unknown panel slot: ${slot}`);
-      }
+        return {
+          result: {
+            layoutId: draftState.workbenchLayout.layoutId,
+            taskId: task.taskId,
+            panelSlot: slot,
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'task',
+              ids: [task.taskId],
+            },
+            {
+              kind: 'projection',
+              projection: 'workbenchLayout',
+              keys: [draftState.workbenchLayout.layoutId],
+            },
+          ],
+        };
+      }),
+    moveTaskStatus: async (request) =>
+      commitCommandMutation('moveTaskStatus', async (draftState) => {
+        const task = ensureTask(draftState, request.taskId);
+        const project = ensureProject(draftState, task.projectId);
 
-      panel.taskId = task.taskId;
-      panel.title = task.title;
-      panel.status = task.status;
-      panel.note = '작업대에서 이어지는 활성 작업';
-      state.workbenchLayout.updatedAt = nowIso();
+        task.status = request.status;
+        task.lastActivity = '방금';
+        draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
 
-      emitInvalidation(state, options.broadcast, 'openInWorkbench', [
-        {
-          kind: 'entity',
-          entity: 'task',
-          ids: [task.taskId],
-        },
-        {
-          kind: 'projection',
-          projection: 'workbenchLayout',
-          keys: [state.workbenchLayout.layoutId],
-        },
-      ]);
+        project.tasks = project.tasks.map((projectTask) =>
+          projectTask.taskId === request.taskId
+            ? {
+                ...projectTask,
+                status: request.status,
+              }
+            : projectTask,
+        );
 
-      return {
-        layoutId: state.workbenchLayout.layoutId,
-        taskId: task.taskId,
-        panelSlot: slot,
-      };
-    },
-    moveTaskStatus: async (request) => {
-      const task = ensureTask(state, request.taskId);
-      const project = ensureProject(state, task.projectId);
+        draftState.workbenchLayout.panels = draftState.workbenchLayout.panels.map((panel) =>
+          panel.taskId === request.taskId
+            ? {
+                ...panel,
+                status: request.status,
+              }
+            : panel,
+        );
 
-      task.status = request.status;
-      task.lastActivity = '방금';
-      state.boardColumns = rebuildBoardColumns(state.tasks);
+        return {
+          result: {
+            taskId: request.taskId,
+            status: request.status,
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'task',
+              ids: [request.taskId],
+            },
+            {
+              kind: 'projection',
+              projection: 'boardColumns',
+            },
+            {
+              kind: 'projection',
+              projection: 'projectDetail',
+              keys: [project.projectId],
+            },
+          ],
+        };
+      }),
+    updateSettings: async (request) =>
+      commitCommandMutation('updateSettings', async (_draftState) => {
+        const updatedKeys = Object.keys(request.patch) as Array<keyof AppSettings>;
 
-      project.tasks = project.tasks.map((projectTask) =>
-        projectTask.taskId === request.taskId
-          ? {
-              ...projectTask,
-              status: request.status,
-            }
-          : projectTask,
-      );
+        return {
+          commit: async () => {
+            const settings = await settingsService.updateSettings(request.patch);
 
-      state.workbenchLayout.panels = state.workbenchLayout.panels.map((panel) =>
-        panel.taskId === request.taskId
-          ? {
-              ...panel,
-              status: request.status,
-            }
-          : panel,
-      );
-
-      emitInvalidation(state, options.broadcast, 'moveTaskStatus', [
-        {
-          kind: 'entity',
-          entity: 'task',
-          ids: [request.taskId],
-        },
-        {
-          kind: 'projection',
-          projection: 'boardColumns',
-        },
-        {
-          kind: 'projection',
-          projection: 'projectDetail',
-          keys: [project.projectId],
-        },
-      ]);
-
-      return {
-        taskId: request.taskId,
-        status: request.status,
-      };
-    },
-    updateSettings: async (request) => {
-      const updatedKeys = Object.keys(request.patch) as Array<keyof AppSettings>;
-      const settings = await settingsService.updateSettings(request.patch);
-
-      emitInvalidation(state, options.broadcast, 'updateSettings', [
-        {
-          kind: 'entity',
-          entity: 'settings',
-          ids: ['app-settings'],
-        },
-        {
-          kind: 'projection',
-          projection: 'settings',
-        },
-      ]);
-
-      return {
-        settings,
-        updatedKeys,
-      };
-    },
+            return {
+              settings,
+              updatedKeys,
+            };
+          },
+          targets: [
+            {
+              kind: 'entity',
+              entity: 'settings',
+              ids: ['app-settings'],
+            },
+            {
+              kind: 'projection',
+              projection: 'settings',
+            },
+          ],
+        };
+      }),
   };
 
   const queries: QueryHandlerMap = {
