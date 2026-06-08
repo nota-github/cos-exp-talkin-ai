@@ -76,6 +76,7 @@ test('story-1.4:VAL-1 persists non-secret settings in SQLite key/value rows acro
       patch: {
         defaultModel: 'claude-sonnet-4',
         optimizationMode: 'quality',
+        responseLanguage: 'en',
         theme: 'dark',
         advancedPromptPreview: true,
       },
@@ -103,17 +104,18 @@ test('story-1.4:VAL-1 persists non-secret settings in SQLite key/value rows acro
         'advancedPromptPreview',
         'defaultModel',
         'optimizationMode',
+        'responseLanguage',
         'theme',
       ]);
       assert.equal(await getSchemaVersion(handle.connection), 4);
       assert.equal(restored.defaultModel, 'claude-sonnet-4');
       assert.equal(restored.optimizationMode, 'quality');
+      assert.equal(restored.responseLanguage, 'en');
       assert.equal(restored.theme, 'dark');
       assert.equal(restored.advancedPromptPreview, true);
-      assert.equal(restored.responseLanguage, 'ko');
       assert.deepEqual(
         rows.map((row) => row.key),
-        ['advancedPromptPreview', 'defaultModel', 'optimizationMode', 'theme'],
+        ['advancedPromptPreview', 'defaultModel', 'optimizationMode', 'responseLanguage', 'theme'],
       );
     } finally {
       await handle.close();
