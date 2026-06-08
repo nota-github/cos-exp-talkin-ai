@@ -8,6 +8,7 @@ import {
   createTranslationMcpAdapter,
 } from './translation/index.ts';
 import { createMainWindowOptions } from './window-config';
+import { createPersistentOptimizationStageOrchestrator } from './workflows/index.ts';
 
 let mainWindow: BrowserWindow | null = null;
 let ipcHandlersRegistered = false;
@@ -18,6 +19,12 @@ function registerIpcHandlers() {
   }
 
   const dbPath = join(app.getPath('userData'), 'talkin-ai.db');
+  const translationAdapter = createTranslationMcpAdapter({
+    runtime: createStdioTranslationMcpRuntime({
+      command:
+        process.env.TALKIN_AI_TRANSLATION_MCP_COMMAND ?? 'talkin-ai-translation-mcp',
+    }),
+  });
 
   registerDesktopIpcHandlers(ipcMain, {
     broadcast: (channel, payload) => {
@@ -27,16 +34,15 @@ function registerIpcHandlers() {
     },
     chatHistoryService: createPersistentChatHistoryService({
       dbPath,
+      optimizationStageOrchestrator: createPersistentOptimizationStageOrchestrator({
+        dbPath,
+        translationAdapter,
+      }),
     }),
     settingsService: createPersistentAppSettingsService({
       dbPath,
     }),
-    translationAdapter: createTranslationMcpAdapter({
-      runtime: createStdioTranslationMcpRuntime({
-        command:
-          process.env.TALKIN_AI_TRANSLATION_MCP_COMMAND ?? 'talkin-ai-translation-mcp',
-      }),
-    }),
+    translationAdapter,
   });
 
   ipcHandlersRegistered = true;

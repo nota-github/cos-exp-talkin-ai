@@ -22,6 +22,7 @@ import {
   type SqliteConnection,
   type SqliteDatabaseHandle,
 } from '../persistence/database';
+import type { OptimizationStageOrchestrator } from '../workflows/index.ts';
 
 type SqlPrimitive = string | number | null;
 
@@ -31,6 +32,12 @@ type PersistentChatHistoryServiceOptions = {
   openDatabase?: (filename: string) => Promise<SqliteDatabaseHandle>;
   migrateSchema?: (connection: SqliteConnection) => Promise<number>;
   createId?: (prefix: string) => string;
+  optimizationStageOrchestrator?: OptimizationStageOrchestrator;
+  onBackgroundWorkflowError?: (input: {
+    operation: 'optimizeQueuedRun';
+    runId: string;
+    error: unknown;
+  }) => void;
 };
 
 type TaskFeedRow = {
@@ -278,7 +285,7 @@ export function createPersistentChatHistoryService(
 
   return {
     async submitPrompt(request) {
-      return withChatPersistence(options, async (persistence) => {
+      const result = await withChatPersistence(options, async (persistence) => {
         const createdAt = now();
         const taskId = createId('task');
         const conversationId = createId('conversation');
@@ -355,6 +362,24 @@ export function createPersistentChatHistoryService(
           acceptedStatus: 'queued' as const,
         };
       });
+
+      if (options.optimizationStageOrchestrator) {
+        void Promise.resolve()
+          .then(() =>
+            options.optimizationStageOrchestrator?.optimizeQueuedRun({
+              runId: result.runId,
+            }),
+          )
+          .catch((error) => {
+            options.onBackgroundWorkflowError?.({
+              operation: 'optimizeQueuedRun',
+              runId: result.runId,
+              error,
+            });
+          });
+      }
+
+      return result;
     },
 
     async getChatFeed(request) {
@@ -392,4 +417,3 @@ export function createPersistentChatHistoryService(
     },
   };
 }
-

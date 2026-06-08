@@ -14,13 +14,20 @@ export type {
   TranslationMcpHealthPayload,
   TranslationMcpMethod,
   TranslationMcpMethodDefinitions,
+  TranslationMcpOptimizationMode,
+  TranslationMcpOptimizePromptParams,
+  TranslationMcpRestoreResponseParams,
   TranslationMcpRuntime,
   TranslationMcpTransport,
   TranslationPreservationInput,
 } from './service';
 export {
   TranslationMcpRuntimeError,
+  buildOutputHintsForTranslationMcp,
   createFakeTranslationMcpRuntime,
   createStdioTranslationMcpRuntime,
   createTranslationMcpAdapter,
+  normalizeOptimizationModeForTranslationMcp,
+  normalizeOptimizePromptInputForTranslationMcp,
+  normalizeRestoreResponseInputForTranslationMcp,
 } from './service';
