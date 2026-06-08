@@ -56,7 +56,7 @@ export type EmptyPayload = Record<string, never>;
 export type AppSettings = {
   defaultModel: CloudModelId;
   optimizationMode: OptimizationMode;
-  responseLanguage: 'ko';
+  responseLanguage: 'ko' | 'en';
   theme: 'light' | 'dark' | 'system';
   advancedPromptPreview: boolean;
 };
