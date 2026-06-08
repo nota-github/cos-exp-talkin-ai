@@ -15,6 +15,7 @@
     "validate:story-1.4": "npm --workspace @talkin-ai/desktop run validate:story-1.4",
     "validate:story-1.5": "npm --workspace @talkin-ai/desktop run validate:story-1.5",
     "validate:story-2.1": "npm --workspace @talkin-ai/desktop run validate:story-2.1",
-    "validate:story-2.2": "npm --workspace @talkin-ai/desktop run validate:story-2.2"
+    "validate:story-2.2": "npm --workspace @talkin-ai/desktop run validate:story-2.2",
+    "validate:story-3.1": "npm --workspace @talkin-ai/desktop run validate:story-3.1"
   }
 }

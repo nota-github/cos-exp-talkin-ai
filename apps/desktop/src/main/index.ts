@@ -3,6 +3,10 @@ import { join } from 'node:path';
 import { createPersistentChatHistoryService } from './chat/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createPersistentAppSettingsService } from './settings/index.ts';
+import {
+  createStdioTranslationMcpRuntime,
+  createTranslationMcpAdapter,
+} from './translation/index.ts';
 import { createMainWindowOptions } from './window-config';
 
 let mainWindow: BrowserWindow | null = null;
@@ -26,6 +30,12 @@ function registerIpcHandlers() {
     }),
     settingsService: createPersistentAppSettingsService({
       dbPath,
+    }),
+    translationAdapter: createTranslationMcpAdapter({
+      runtime: createStdioTranslationMcpRuntime({
+        command:
+          process.env.TALKIN_AI_TRANSLATION_MCP_COMMAND ?? 'talkin-ai-translation-mcp',
+      }),
     }),
   });
 
