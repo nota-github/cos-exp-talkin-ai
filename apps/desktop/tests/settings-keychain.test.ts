@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createDesktopIpcService } from '../src/main/ipc/register-ipc.ts';
+import { createConnectionHealthService } from '../src/main/connections/index.ts';
 import { openSqliteDatabase, getSchemaVersion } from '../src/main/persistence/index.ts';
 import {
   createPersistentSecretService,
@@ -212,4 +213,67 @@ test('story-1.4:VAL-3 renderer and preload surfaces expose no direct secret serv
   assert.equal('secrets' in client, false);
   assert.ok(commandNames.every((name) => !name.toLowerCase().includes('secret')));
   assert.ok(queryNames.every((name) => !name.toLowerCase().includes('secret')));
+});
+
+test('story-6.2:VAL-2 and story-6.2:AC-2 keep provider API key edits out of SQLite plaintext after settings writes', async () => {
+  const temp = createTempDatabasePath();
+
+  try {
+    const settingsService = createPersistentAppSettingsService({
+      dbPath: temp.dbPath,
+    });
+    const fakeKeychain = createFakeKeychainClient();
+    const secretService = createPersistentSecretService({
+      keychainClient: fakeKeychain.keychainClient,
+    });
+    const service = createDesktopIpcService({
+      settingsService,
+      secretService,
+      connectionHealthService: createConnectionHealthService({
+        secretService,
+        settingsService,
+      }),
+    });
+
+    await service.commands.updateSettings({
+      patch: {
+        defaultModel: 'gpt-4.1',
+      },
+    });
+    await service.commands.saveApiKey({
+      provider: 'openai',
+      apiKey: 'sk-openai-plaintext-check',
+    });
+
+    const handle = await openSqliteDatabase(temp.dbPath);
+
+    try {
+      const rows = await handle.connection.query<{
+        key: string;
+        value_json: string;
+      }>(`
+        SELECT key, value_json
+        FROM settings
+        ORDER BY key ASC;
+      `);
+
+      assert.equal(await secretService.getProviderApiKey('openai'), 'sk-openai-plaintext-check');
+      assert.deepEqual([...fakeKeychain.entries.keys()], ['talkin-ai.desktop|provider:openai']);
+      assert.deepEqual(rows, [
+        {
+          key: 'defaultModel',
+          value_json: '"gpt-4.1"',
+        },
+      ]);
+      assert.equal(
+        readFileSync(temp.dbPath).includes(Buffer.from('sk-openai-plaintext-check')),
+        false,
+      );
+      assert.equal(existsSync(join(temp.directory, 'secrets.json')), false);
+    } finally {
+      await handle.close();
+    }
+  } finally {
+    temp.cleanup();
+  }
 });

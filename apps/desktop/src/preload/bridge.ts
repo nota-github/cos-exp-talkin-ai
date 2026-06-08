@@ -61,6 +61,8 @@ export function createTalkinAIDesktopApi(
           invokeCommand(ipcRenderer, 'closeWorkbenchPanel', request),
         moveTaskStatus: (request) => invokeCommand(ipcRenderer, 'moveTaskStatus', request),
         updateSettings: (request) => invokeCommand(ipcRenderer, 'updateSettings', request),
+        saveApiKey: (request) => invokeCommand(ipcRenderer, 'saveApiKey', request),
+        deleteApiKey: (request) => invokeCommand(ipcRenderer, 'deleteApiKey', request),
       },
       queries: {
         getChatFeed: (request) => invokeQuery(ipcRenderer, 'getChatFeed', request),
@@ -72,6 +74,7 @@ export function createTalkinAIDesktopApi(
         getHistoryFeed: (request) => invokeQuery(ipcRenderer, 'getHistoryFeed', request),
         getHistoryEntry: (request) => invokeQuery(ipcRenderer, 'getHistoryEntry', request),
         getSettings: (request) => invokeQuery(ipcRenderer, 'getSettings', request),
+        getConnectionHealth: (request) => invokeQuery(ipcRenderer, 'getConnectionHealth', request),
       },
       events: {
         onInvalidation: (listener) => {

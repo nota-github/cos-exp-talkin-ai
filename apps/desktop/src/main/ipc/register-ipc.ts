@@ -36,7 +36,12 @@ import {
 } from '../../shared/ipc/workbench.ts';
 import type { BoardService } from '../board/index.ts';
 import type { ChatHistoryService } from '../chat/index.ts';
+import {
+  createConnectionHealthService,
+  type ConnectionHealthService,
+} from '../connections/index.ts';
 import type { HistoryInspectionService } from '../history/index.ts';
+import type { SecretService } from '../keychain/index.ts';
 import type { ProjectService } from '../projects/index.ts';
 import {
   createInMemoryAppSettingsService,
@@ -127,8 +132,10 @@ export type RegisterDesktopIpcOptions = {
     nextState: DesktopIpcState,
   ) => Promise<void> | void;
   state?: DesktopIpcState;
+  connectionHealthService?: ConnectionHealthService;
   historyInspectionService?: HistoryInspectionService;
   projectService?: ProjectService;
+  secretService?: SecretService;
   settingsService?: AppSettingsService;
   translationAdapter?: TranslationMcpAdapter;
   usageDashboardService?: UsageDashboardService;
@@ -1137,6 +1144,13 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   const projectService = options.projectService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
   const translationAdapter = options.translationAdapter ?? null;
+  const connectionHealthService =
+    options.connectionHealthService ??
+    createConnectionHealthService({
+      secretService: options.secretService,
+      settingsService,
+      translationAdapter,
+    });
   const usageDashboardService = options.usageDashboardService ?? null;
   const workbenchService = options.workbenchService ?? null;
 
@@ -1969,6 +1983,34 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               kind: 'projection',
               projection: 'settings',
             },
+            {
+              kind: 'projection',
+              projection: 'connectionHealth',
+            },
+          ],
+        };
+      }),
+    saveApiKey: async (request) =>
+      commitCommandMutation('saveApiKey', async () => {
+        return {
+          commit: async () => connectionHealthService.saveApiKey(request),
+          targets: [
+            {
+              kind: 'projection',
+              projection: 'connectionHealth',
+            },
+          ],
+        };
+      }),
+    deleteApiKey: async (request) =>
+      commitCommandMutation('deleteApiKey', async () => {
+        return {
+          commit: async () => connectionHealthService.deleteApiKey(request),
+          targets: [
+            {
+              kind: 'projection',
+              projection: 'connectionHealth',
+            },
           ],
         };
       }),
@@ -2011,6 +2053,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         ? historyInspectionService.getHistoryEntry(request)
         : clone(ensureHistoryEntry(state, request.runId)),
     getSettings: async () => settingsService.getSettings(),
+    getConnectionHealth: async () => connectionHealthService.getConnectionHealth(),
   };
 
   return {

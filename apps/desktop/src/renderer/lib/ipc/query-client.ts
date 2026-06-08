@@ -108,6 +108,7 @@ function matchesProjectionTarget<TName extends DesktopQueryName>(
     historyFeed: 'getHistoryFeed',
     historyEntry: 'getHistoryEntry',
     settings: 'getSettings',
+    connectionHealth: 'getConnectionHealth',
   };
 
   if (projectionToQueryName[target.projection] !== descriptor.name) {
@@ -131,7 +132,7 @@ function matchesEntityTarget<TName extends DesktopQueryName>(
     conversation: ['getChatFeed', 'getWorkbenchLayout'],
     run: ['getWorkbenchLayout', 'getHistoryFeed', 'getHistoryEntry'],
     project: ['getWorkbenchLayout', 'getBoardColumns', 'getProjectList', 'getProjectDetail'],
-    settings: ['getSettings'],
+    settings: ['getSettings', 'getConnectionHealth'],
   };
 
   return entityDependencies[target.entity].includes(descriptor.name);
