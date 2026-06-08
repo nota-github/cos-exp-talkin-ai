@@ -181,6 +181,56 @@ const desktopSchemaMigrations: SchemaMigration[] = [
       ALTER TABLE usage_records_v3 RENAME TO usage_records;
     `,
   },
+  {
+    id: 4,
+    name: 'work_management_schema',
+    sql: `
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS workbench_layouts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS workbench_panels (
+        id TEXT PRIMARY KEY,
+        layout_id TEXT NOT NULL REFERENCES workbench_layouts(id) ON DELETE CASCADE,
+        panel_slot TEXT NOT NULL CHECK (
+          panel_slot IN ('north-west', 'north-east', 'south-west', 'south-east')
+        ),
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        pinned INTEGER NOT NULL CHECK (pinned IN (0, 1)),
+        updated_at TEXT NOT NULL,
+        UNIQUE (layout_id, panel_slot),
+        UNIQUE (layout_id, task_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workbench_panels_layout_id ON workbench_panels(layout_id);
+      CREATE INDEX IF NOT EXISTS idx_workbench_panels_task_id ON workbench_panels(task_id);
+
+      CREATE TABLE IF NOT EXISTS file_assets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL,
+        storage_path TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0)
+      );
+      CREATE INDEX IF NOT EXISTS idx_file_assets_project_id ON file_assets(project_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+      CREATE INDEX IF NOT EXISTS idx_tasks_status_last_activity_at
+        ON tasks(status, last_activity_at DESC);
+    `,
+  },
 ];
 
 type PendingCommand = {

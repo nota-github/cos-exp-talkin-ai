@@ -1,24 +1,39 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SqliteConnection } from './database';
-import type {
-  ChatRunPersistence,
-  ChatRunPersistenceScope,
-  CompleteRunWithUsageInput,
-  ConversationRecord,
-  CreateConversationInput,
-  CreateMessageInput,
-  CreatePromptArtifactInput,
-  CreateRunRecordInput,
-  CreateRunStageInput,
-  CreateTaskInput,
-  CreateUsageRecordInput,
-  JsonObject,
-  MessageRecord,
-  PromptArtifactRecord,
-  RunRecord,
-  RunStageRecord,
-  TaskRecord,
-  UsageRecord,
+import {
+  taskStatuses,
+  type BoardColumnRecord,
+  type ChatRunPersistence,
+  type ChatRunPersistenceScope,
+  type CompleteRunWithUsageInput,
+  type ConversationRecord,
+  type CreateConversationInput,
+  type CreateFileAssetInput,
+  type CreateMessageInput,
+  type CreateProjectInput,
+  type CreatePromptArtifactInput,
+  type CreateRunRecordInput,
+  type CreateRunStageInput,
+  type CreateTaskInput,
+  type CreateUsageRecordInput,
+  type CreateWorkbenchLayoutInput,
+  type FileAssetRecord,
+  type JsonObject,
+  type MessageRecord,
+  type ProjectDetailRecord,
+  type ProjectListItem,
+  type ProjectRecord,
+  type ProjectTaskRecord,
+  type PromptArtifactRecord,
+  type RecentTaskRecord,
+  type RunRecord,
+  type RunStageRecord,
+  type SaveWorkbenchPanelInput,
+  type TaskRecord,
+  type UsageRecord,
+  type WorkbenchLayoutDetail,
+  type WorkbenchLayoutRecord,
+  type WorkbenchPanelRecord,
 } from './types';
 
 type TaskRow = {
@@ -98,6 +113,72 @@ type UsageRecordRow = {
   is_estimated: number;
 };
 
+type ProjectRow = {
+  id: string;
+  name: string;
+  description: string;
+  goal: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectListRow = ProjectRow & {
+  task_count: number;
+  file_asset_count: number;
+  last_task_activity_at: string | null;
+};
+
+type ProjectTaskRow = {
+  task_id: string;
+  title: string;
+  status: TaskRecord['status'];
+  last_activity_at: string;
+};
+
+type WorkbenchLayoutRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkbenchPanelRow = {
+  id: string;
+  layout_id: string;
+  panel_slot: WorkbenchPanelRecord['panelSlot'];
+  task_id: string | null;
+  pinned: number;
+  updated_at: string;
+};
+
+type FileAssetRow = {
+  id: string;
+  project_id: string;
+  display_name: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+type RecentTaskRow = {
+  task_id: string;
+  title: string;
+  status: TaskRecord['status'];
+  project_id: string | null;
+  project_name: string | null;
+  source_screen: TaskRecord['sourceScreen'];
+  last_activity_at: string;
+};
+
+type BoardCardRow = {
+  task_id: string;
+  title: string;
+  status: TaskRecord['status'];
+  project_id: string | null;
+  project_name: string | null;
+  last_activity_at: string;
+};
+
 type SqlPrimitive = string | number | null;
 
 function sqlValue(value: SqlPrimitive): string {
@@ -126,6 +207,47 @@ function sqlJson(value: JsonObject | null): string {
 
 function firstOrNull<T>(rows: T[]): T | null {
   return rows[0] ?? null;
+}
+
+function toCount(value: number | string): number {
+  return Number(value);
+}
+
+function normalizedLimit(limit?: number): number {
+  if (limit === undefined) {
+    return 12;
+  }
+
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`Expected a positive integer task limit, received: ${limit}`);
+  }
+
+  return limit;
+}
+
+function panelSlotOrderSql(columnName: string): string {
+  return `CASE ${columnName}
+    WHEN 'north-west' THEN 0
+    WHEN 'north-east' THEN 1
+    WHEN 'south-west' THEN 2
+    WHEN 'south-east' THEN 3
+    ELSE 4
+  END`;
+}
+
+function taskStatusOrderSql(columnName: string): string {
+  return `CASE ${columnName}
+    WHEN 'planning' THEN 0
+    WHEN 'in_progress' THEN 1
+    WHEN 'ai_review' THEN 2
+    WHEN 'human_review' THEN 3
+    WHEN 'completed' THEN 4
+    ELSE 5
+  END`;
+}
+
+function maxIsoTimestamp(base: string, candidates: string[]): string {
+  return candidates.reduce((latest, candidate) => (candidate > latest ? candidate : latest), base);
 }
 
 function mapTaskRow(row: TaskRow | null): TaskRecord | null {
@@ -247,6 +369,137 @@ function mapUsageRecordRow(row: UsageRecordRow | null): UsageRecord | null {
   };
 }
 
+function mapProjectRow(row: ProjectRow | null): ProjectRecord | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    goal: row.goal,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProjectListRow(row: ProjectListRow): ProjectListItem {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    goal: row.goal,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    taskCount: toCount(row.task_count),
+    fileAssetCount: toCount(row.file_asset_count),
+    lastTaskActivityAt: row.last_task_activity_at,
+  };
+}
+
+function mapProjectTaskRow(row: ProjectTaskRow): ProjectTaskRecord {
+  return {
+    taskId: row.task_id,
+    title: row.title,
+    status: row.status,
+    lastActivityAt: row.last_activity_at,
+  };
+}
+
+function mapWorkbenchLayoutRow(row: WorkbenchLayoutRow | null): WorkbenchLayoutRecord | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapWorkbenchPanelRow(row: WorkbenchPanelRow | null): WorkbenchPanelRecord | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    layoutId: row.layout_id,
+    panelSlot: row.panel_slot,
+    taskId: row.task_id,
+    pinned: row.pinned === 1,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapFileAssetRow(row: FileAssetRow | null): FileAssetRecord | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    displayName: row.display_name,
+    storagePath: row.storage_path,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+  };
+}
+
+function mapRecentTaskRow(row: RecentTaskRow): RecentTaskRecord {
+  return {
+    taskId: row.task_id,
+    title: row.title,
+    status: row.status,
+    projectId: row.project_id,
+    projectName: row.project_name,
+    sourceScreen: row.source_screen,
+    lastActivityAt: row.last_activity_at,
+  };
+}
+
+function mapBoardCardRow(row: BoardCardRow) {
+  return {
+    taskId: row.task_id,
+    title: row.title,
+    projectId: row.project_id,
+    projectName: row.project_name,
+    lastActivityAt: row.last_activity_at,
+  };
+}
+
+async function listWorkbenchPanelsByLayout(
+  connection: SqliteConnection,
+  layoutId: string,
+): Promise<WorkbenchPanelRecord[]> {
+  const rows = await connection.query<WorkbenchPanelRow>(`
+    SELECT *
+    FROM workbench_panels
+    WHERE layout_id = ${sqlValue(layoutId)}
+    ORDER BY ${panelSlotOrderSql('panel_slot')} ASC;
+  `);
+
+  return rows.map((row) => mapWorkbenchPanelRow(row) as WorkbenchPanelRecord);
+}
+
+async function listFileAssetsByProject(
+  connection: SqliteConnection,
+  projectId: string,
+): Promise<FileAssetRecord[]> {
+  const rows = await connection.query<FileAssetRow>(`
+    SELECT *
+    FROM file_assets
+    WHERE project_id = ${sqlValue(projectId)}
+    ORDER BY display_name ASC, rowid ASC;
+  `);
+
+  return rows.map((row) => mapFileAssetRow(row) as FileAssetRecord);
+}
+
 function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
   return {
     tasks: {
@@ -298,6 +551,51 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
         `);
 
         return this.getById(input.taskId);
+      },
+
+      async updateWorkflow(input) {
+        if (input.status === undefined && input.projectId === undefined) {
+          throw new Error('Expected status or projectId when updating canonical task workflow state');
+        }
+
+        const assignments = [`updated_at = ${sqlValue(input.updatedAt)}`];
+
+        if (input.status !== undefined) {
+          assignments.push(`status = ${sqlValue(input.status)}`);
+        }
+
+        if (input.projectId !== undefined) {
+          assignments.push(`project_id = ${sqlValue(input.projectId)}`);
+        }
+
+        assignments.push(`last_activity_at = ${sqlValue(input.lastActivityAt ?? input.updatedAt)}`);
+
+        await connection.exec(`
+          UPDATE tasks
+          SET ${assignments.join(',\n              ')}
+          WHERE id = ${sqlValue(input.taskId)};
+        `);
+
+        return this.getById(input.taskId);
+      },
+
+      async listRecent(limit) {
+        const rows = await connection.query<RecentTaskRow>(`
+          SELECT
+            t.id AS task_id,
+            t.title,
+            t.status,
+            t.project_id,
+            p.name AS project_name,
+            t.source_screen,
+            t.last_activity_at
+          FROM tasks t
+          LEFT JOIN projects p ON p.id = t.project_id
+          ORDER BY t.last_activity_at DESC, t.updated_at DESC
+          LIMIT ${sqlValue(normalizedLimit(limit))};
+        `);
+
+        return rows.map((row) => mapRecentTaskRow(row));
       },
     },
 
@@ -568,6 +866,312 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
         return mapUsageRecordRow(firstOrNull(rows));
       },
     },
+
+    projects: {
+      async create(input: CreateProjectInput) {
+        await connection.exec(`
+          INSERT INTO projects (
+            id,
+            name,
+            description,
+            goal,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${sqlValue(input.id)},
+            ${sqlValue(input.name)},
+            ${sqlValue(input.description)},
+            ${sqlValue(input.goal)},
+            ${sqlValue(input.createdAt)},
+            ${sqlValue(input.updatedAt)}
+          );
+        `);
+
+        return (await this.getById(input.id)) as ProjectRecord;
+      },
+
+      async getById(projectId: string) {
+        const rows = await connection.query<ProjectRow>(`
+          SELECT *
+          FROM projects
+          WHERE id = ${sqlValue(projectId)}
+          LIMIT 1;
+        `);
+
+        return mapProjectRow(firstOrNull(rows));
+      },
+
+      async list() {
+        const rows = await connection.query<ProjectListRow>(`
+          SELECT
+            p.id,
+            p.name,
+            p.description,
+            p.goal,
+            p.created_at,
+            p.updated_at,
+            COUNT(DISTINCT t.id) AS task_count,
+            COUNT(DISTINCT f.id) AS file_asset_count,
+            MAX(t.last_activity_at) AS last_task_activity_at
+          FROM projects p
+          LEFT JOIN tasks t ON t.project_id = p.id
+          LEFT JOIN file_assets f ON f.project_id = p.id
+          GROUP BY p.id
+          ORDER BY COALESCE(MAX(t.last_activity_at), p.updated_at) DESC, p.updated_at DESC;
+        `);
+
+        return rows.map((row) => mapProjectListRow(row));
+      },
+
+      async getDetail(projectId: string) {
+        const project = await this.getById(projectId);
+        if (!project) {
+          return null;
+        }
+
+        const taskRows = await connection.query<ProjectTaskRow>(`
+          SELECT
+            id AS task_id,
+            title,
+            status,
+            last_activity_at
+          FROM tasks
+          WHERE project_id = ${sqlValue(projectId)}
+          ORDER BY last_activity_at DESC, updated_at DESC;
+        `);
+
+        return {
+          ...project,
+          tasks: taskRows.map((row) => mapProjectTaskRow(row)),
+          fileAssets: await listFileAssetsByProject(connection, projectId),
+        } satisfies ProjectDetailRecord;
+      },
+    },
+
+    workbenchLayouts: {
+      async create(input: CreateWorkbenchLayoutInput) {
+        await connection.exec(`
+          INSERT INTO workbench_layouts (
+            id,
+            name,
+            created_at,
+            updated_at
+          ) VALUES (
+            ${sqlValue(input.id)},
+            ${sqlValue(input.name)},
+            ${sqlValue(input.createdAt)},
+            ${sqlValue(input.updatedAt)}
+          );
+        `);
+
+        return (await this.getById(input.id)) as WorkbenchLayoutRecord;
+      },
+
+      async getById(layoutId: string) {
+        const rows = await connection.query<WorkbenchLayoutRow>(`
+          SELECT *
+          FROM workbench_layouts
+          WHERE id = ${sqlValue(layoutId)}
+          LIMIT 1;
+        `);
+
+        return mapWorkbenchLayoutRow(firstOrNull(rows));
+      },
+
+      async list() {
+        const rows = await connection.query<WorkbenchLayoutRow>(`
+          SELECT *
+          FROM workbench_layouts
+          ORDER BY updated_at DESC, created_at DESC;
+        `);
+
+        return rows.map((row) => mapWorkbenchLayoutRow(row) as WorkbenchLayoutRecord);
+      },
+
+      async getDetail(layoutId: string) {
+        const layout = await this.getById(layoutId);
+        if (!layout) {
+          return null;
+        }
+
+        const panels = await listWorkbenchPanelsByLayout(connection, layoutId);
+        const effectiveUpdatedAt = panels.length
+          ? maxIsoTimestamp(
+              layout.updatedAt,
+              panels.map((panel) => panel.updatedAt),
+            )
+          : layout.updatedAt;
+
+        return {
+          layout: {
+            ...layout,
+            updatedAt: effectiveUpdatedAt,
+          },
+          panels,
+        } satisfies WorkbenchLayoutDetail;
+      },
+    },
+
+    workbenchPanels: {
+      async save(input: SaveWorkbenchPanelInput) {
+        if (input.taskId !== null) {
+          await connection.exec(`
+            UPDATE workbench_panels
+            SET task_id = NULL,
+                pinned = 0,
+                updated_at = ${sqlValue(input.updatedAt)}
+            WHERE layout_id = ${sqlValue(input.layoutId)}
+              AND task_id = ${sqlValue(input.taskId)}
+              AND panel_slot <> ${sqlValue(input.panelSlot)};
+          `);
+        }
+
+        await connection.exec(`
+          INSERT INTO workbench_panels (
+            id,
+            layout_id,
+            panel_slot,
+            task_id,
+            pinned,
+            updated_at
+          ) VALUES (
+            ${sqlValue(input.id)},
+            ${sqlValue(input.layoutId)},
+            ${sqlValue(input.panelSlot)},
+            ${sqlValue(input.taskId)},
+            ${sqlValue(input.pinned ? 1 : 0)},
+            ${sqlValue(input.updatedAt)}
+          )
+          ON CONFLICT(layout_id, panel_slot) DO UPDATE SET
+            task_id = excluded.task_id,
+            pinned = excluded.pinned,
+            updated_at = excluded.updated_at;
+        `);
+
+        return (await this.getBySlot(input.layoutId, input.panelSlot)) as WorkbenchPanelRecord;
+      },
+
+      async getBySlot(layoutId: string, panelSlot: WorkbenchPanelRecord['panelSlot']) {
+        const rows = await connection.query<WorkbenchPanelRow>(`
+          SELECT *
+          FROM workbench_panels
+          WHERE layout_id = ${sqlValue(layoutId)}
+            AND panel_slot = ${sqlValue(panelSlot)}
+          LIMIT 1;
+        `);
+
+        return mapWorkbenchPanelRow(firstOrNull(rows));
+      },
+
+      async getByTask(layoutId: string, taskId: string) {
+        const rows = await connection.query<WorkbenchPanelRow>(`
+          SELECT *
+          FROM workbench_panels
+          WHERE layout_id = ${sqlValue(layoutId)}
+            AND task_id = ${sqlValue(taskId)}
+          LIMIT 1;
+        `);
+
+        return mapWorkbenchPanelRow(firstOrNull(rows));
+      },
+
+      async listByLayout(layoutId: string) {
+        return listWorkbenchPanelsByLayout(connection, layoutId);
+      },
+    },
+
+    fileAssets: {
+      async create(input: CreateFileAssetInput) {
+        await connection.exec(`
+          INSERT INTO file_assets (
+            id,
+            project_id,
+            display_name,
+            storage_path,
+            mime_type,
+            size_bytes
+          ) VALUES (
+            ${sqlValue(input.id)},
+            ${sqlValue(input.projectId)},
+            ${sqlValue(input.displayName)},
+            ${sqlValue(input.storagePath)},
+            ${sqlValue(input.mimeType)},
+            ${sqlValue(input.sizeBytes)}
+          );
+        `);
+
+        return (await this.getById(input.id)) as FileAssetRecord;
+      },
+
+      async getById(fileAssetId: string) {
+        const rows = await connection.query<FileAssetRow>(`
+          SELECT *
+          FROM file_assets
+          WHERE id = ${sqlValue(fileAssetId)}
+          LIMIT 1;
+        `);
+
+        return mapFileAssetRow(firstOrNull(rows));
+      },
+
+      async update(input) {
+        await connection.exec(`
+          UPDATE file_assets
+          SET project_id = ${sqlValue(input.projectId)},
+              display_name = ${sqlValue(input.displayName)},
+              storage_path = ${sqlValue(input.storagePath)},
+              mime_type = ${sqlValue(input.mimeType)},
+              size_bytes = ${sqlValue(input.sizeBytes)}
+          WHERE id = ${sqlValue(input.id)};
+        `);
+
+        return this.getById(input.id);
+      },
+
+      async delete(fileAssetId: string) {
+        await connection.exec(`
+          DELETE FROM file_assets
+          WHERE id = ${sqlValue(fileAssetId)};
+        `);
+      },
+
+      async listByProject(projectId: string) {
+        return listFileAssetsByProject(connection, projectId);
+      },
+    },
+
+    board: {
+      async getColumns() {
+        const rows = await connection.query<BoardCardRow>(`
+          SELECT
+            t.id AS task_id,
+            t.title,
+            t.status,
+            t.project_id,
+            p.name AS project_name,
+            t.last_activity_at
+          FROM tasks t
+          LEFT JOIN projects p ON p.id = t.project_id
+          ORDER BY ${taskStatusOrderSql('t.status')} ASC, t.last_activity_at DESC;
+        `);
+
+        const cardsByStatus = new Map<TaskRecord['status'], ReturnType<typeof mapBoardCardRow>[]>(
+          taskStatuses.map((status) => [status, []]),
+        );
+
+        for (const row of rows) {
+          cardsByStatus.get(row.status)?.push(mapBoardCardRow(row));
+        }
+
+        return taskStatuses.map(
+          (status) =>
+            ({
+              status,
+              cards: cardsByStatus.get(status) ?? [],
+            }) satisfies BoardColumnRecord,
+        );
+      },
+    },
   };
 }
 
@@ -601,6 +1205,11 @@ function gateScope(
     runStages: gateRepository(scope.runStages, gate),
     promptArtifacts: gateRepository(scope.promptArtifacts, gate),
     usageRecords: gateRepository(scope.usageRecords, gate),
+    projects: gateRepository(scope.projects, gate),
+    workbenchLayouts: gateRepository(scope.workbenchLayouts, gate),
+    workbenchPanels: gateRepository(scope.workbenchPanels, gate),
+    fileAssets: gateRepository(scope.fileAssets, gate),
+    board: gateRepository(scope.board, gate),
   };
 }
 

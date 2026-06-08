@@ -1,9 +1,18 @@
 import type {
   CloudModelId,
   OptimizationMode,
+  PanelSlot,
   TaskStatus,
 } from '../../shared/ipc/contracts';
 import type { SqliteConnection } from './database';
+
+export const taskStatuses = [
+  'planning',
+  'in_progress',
+  'ai_review',
+  'human_review',
+  'completed',
+] as const satisfies readonly TaskStatus[];
 
 export const taskSourceScreens = ['chat', 'workbench', 'projects', 'kanban'] as const;
 export type TaskSourceScreen = (typeof taskSourceScreens)[number];
@@ -132,6 +141,86 @@ export type UsageRecord = {
   isEstimated: boolean;
 };
 
+export type ProjectRecord = {
+  id: string;
+  name: string;
+  description: string;
+  goal: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectListItem = ProjectRecord & {
+  taskCount: number;
+  fileAssetCount: number;
+  lastTaskActivityAt: string | null;
+};
+
+export type ProjectTaskRecord = {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  lastActivityAt: string;
+};
+
+export type WorkbenchLayoutRecord = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkbenchPanelRecord = {
+  id: string;
+  layoutId: string;
+  panelSlot: PanelSlot;
+  taskId: string | null;
+  pinned: boolean;
+  updatedAt: string;
+};
+
+export type WorkbenchLayoutDetail = {
+  layout: WorkbenchLayoutRecord;
+  panels: WorkbenchPanelRecord[];
+};
+
+export type FileAssetRecord = {
+  id: string;
+  projectId: string;
+  displayName: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+};
+
+export type ProjectDetailRecord = ProjectRecord & {
+  tasks: ProjectTaskRecord[];
+  fileAssets: FileAssetRecord[];
+};
+
+export type RecentTaskRecord = {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  projectId: string | null;
+  projectName: string | null;
+  sourceScreen: TaskSourceScreen;
+  lastActivityAt: string;
+};
+
+export type BoardTaskCardRecord = {
+  taskId: string;
+  title: string;
+  projectId: string | null;
+  projectName: string | null;
+  lastActivityAt: string;
+};
+
+export type BoardColumnRecord = {
+  status: TaskStatus;
+  cards: BoardTaskCardRecord[];
+};
+
 export type CreateTaskInput = TaskRecord;
 export type CreateConversationInput = ConversationRecord;
 export type CreateMessageInput = MessageRecord;
@@ -139,6 +228,10 @@ export type CreateRunRecordInput = RunRecord;
 export type CreateRunStageInput = RunStageRecord;
 export type CreatePromptArtifactInput = PromptArtifactRecord;
 export type CreateUsageRecordInput = UsageRecord;
+export type CreateProjectInput = ProjectRecord;
+export type CreateWorkbenchLayoutInput = WorkbenchLayoutRecord;
+export type CreateFileAssetInput = FileAssetRecord;
+export type UpdateFileAssetInput = FileAssetRecord;
 
 export type UpdateRunRecordStatusInput = {
   runId: string;
@@ -153,6 +246,23 @@ export type UpdateTaskActivityInput = {
   lastActivityAt: string;
 };
 
+export type UpdateTaskWorkflowInput = {
+  taskId: string;
+  status?: TaskStatus;
+  projectId?: string | null;
+  updatedAt: string;
+  lastActivityAt?: string;
+};
+
+export type SaveWorkbenchPanelInput = {
+  id: string;
+  layoutId: string;
+  panelSlot: PanelSlot;
+  taskId: string | null;
+  pinned: boolean;
+  updatedAt: string;
+};
+
 export type CompleteRunWithUsageInput = {
   runId: string;
   endedAt: string;
@@ -165,6 +275,8 @@ export interface TaskRepository {
   create(input: CreateTaskInput): Promise<TaskRecord>;
   getById(taskId: string): Promise<TaskRecord | null>;
   updateActivity(input: UpdateTaskActivityInput): Promise<TaskRecord | null>;
+  updateWorkflow(input: UpdateTaskWorkflowInput): Promise<TaskRecord | null>;
+  listRecent(limit?: number): Promise<RecentTaskRecord[]>;
 }
 
 export interface ConversationRepository {
@@ -200,6 +312,39 @@ export interface UsageRecordRepository {
   getByRunId(runId: string): Promise<UsageRecord | null>;
 }
 
+export interface ProjectRepository {
+  create(input: CreateProjectInput): Promise<ProjectRecord>;
+  getById(projectId: string): Promise<ProjectRecord | null>;
+  list(): Promise<ProjectListItem[]>;
+  getDetail(projectId: string): Promise<ProjectDetailRecord | null>;
+}
+
+export interface WorkbenchLayoutRepository {
+  create(input: CreateWorkbenchLayoutInput): Promise<WorkbenchLayoutRecord>;
+  getById(layoutId: string): Promise<WorkbenchLayoutRecord | null>;
+  list(): Promise<WorkbenchLayoutRecord[]>;
+  getDetail(layoutId: string): Promise<WorkbenchLayoutDetail | null>;
+}
+
+export interface WorkbenchPanelRepository {
+  save(input: SaveWorkbenchPanelInput): Promise<WorkbenchPanelRecord>;
+  getBySlot(layoutId: string, panelSlot: PanelSlot): Promise<WorkbenchPanelRecord | null>;
+  getByTask(layoutId: string, taskId: string): Promise<WorkbenchPanelRecord | null>;
+  listByLayout(layoutId: string): Promise<WorkbenchPanelRecord[]>;
+}
+
+export interface FileAssetRepository {
+  create(input: CreateFileAssetInput): Promise<FileAssetRecord>;
+  getById(fileAssetId: string): Promise<FileAssetRecord | null>;
+  update(input: UpdateFileAssetInput): Promise<FileAssetRecord | null>;
+  delete(fileAssetId: string): Promise<void>;
+  listByProject(projectId: string): Promise<FileAssetRecord[]>;
+}
+
+export interface BoardRepository {
+  getColumns(): Promise<BoardColumnRecord[]>;
+}
+
 export interface ChatRunPersistenceScope {
   tasks: TaskRepository;
   conversations: ConversationRepository;
@@ -208,6 +353,11 @@ export interface ChatRunPersistenceScope {
   runStages: RunStageRepository;
   promptArtifacts: PromptArtifactRepository;
   usageRecords: UsageRecordRepository;
+  projects: ProjectRepository;
+  workbenchLayouts: WorkbenchLayoutRepository;
+  workbenchPanels: WorkbenchPanelRepository;
+  fileAssets: FileAssetRepository;
+  board: BoardRepository;
 }
 
 export interface ChatRunPersistence extends ChatRunPersistenceScope {
