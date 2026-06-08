@@ -7,6 +7,7 @@ import {
   createChatRunPersistence,
   getSchemaVersion,
   migrateCoreSchema,
+  migrateDesktopSchema,
   openSqliteDatabase,
   resolveBundledSqliteBinaryPath,
   type ChatRunPersistence,
@@ -130,6 +131,7 @@ function createUsageRecord(runId: string, usageId = 'usage-001'): CreateUsageRec
     estimatedCostWithOptimization: 0.0136,
     pricingVersion: 'openai-gpt-4.1-2026-06',
     latencyMs: 1840,
+    isEstimated: false,
   };
 }
 
@@ -258,6 +260,86 @@ test('story-1.3:VAL-3 transaction rollback leaves no partial run completion or u
     assert.equal(storedUsage, null);
   } finally {
     await temp.cleanup();
+  }
+});
+
+test('story-4.1:AC-4 desktop migration preserves legacy pricing versions and backfills estimate flags on usage rows', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'talkin-ai-desktop-migration-'));
+  const dbPath = join(directory, 'legacy.db');
+  writeFileSync(dbPath, '');
+  const handle = await openSqliteDatabase(dbPath);
+
+  try {
+    await handle.connection.exec(`
+      CREATE TABLE run_records (
+        id TEXT PRIMARY KEY
+      );
+      CREATE TABLE usage_records (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL UNIQUE REFERENCES run_records(id) ON DELETE CASCADE,
+        baseline_input_tokens INTEGER NOT NULL CHECK (baseline_input_tokens >= 0),
+        optimized_input_tokens INTEGER NOT NULL CHECK (optimized_input_tokens >= 0),
+        output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+        estimated_cost_without_optimization REAL NOT NULL,
+        estimated_cost_with_optimization REAL NOT NULL,
+        pricing_version TEXT NOT NULL,
+        latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0)
+      );
+      CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO run_records (id) VALUES ('run-legacy');
+      INSERT INTO usage_records (
+        id,
+        run_id,
+        baseline_input_tokens,
+        optimized_input_tokens,
+        output_tokens,
+        estimated_cost_without_optimization,
+        estimated_cost_with_optimization,
+        pricing_version,
+        latency_ms
+      ) VALUES (
+        'usage-legacy',
+        'run-legacy',
+        480,
+        292,
+        164,
+        0.002272,
+        0.001896,
+        'openai-gpt-4.1-2026-05',
+        980
+      );
+      PRAGMA user_version = 2;
+    `);
+
+    const version = await migrateDesktopSchema(handle.connection);
+    const columns = await handle.connection.query<{ name: string }>(`
+      PRAGMA table_info(usage_records);
+    `);
+    const rows = await handle.connection.query<{
+      pricing_version: string;
+      is_estimated: number;
+    }>(`
+      SELECT pricing_version, is_estimated
+      FROM usage_records
+      WHERE id = 'usage-legacy';
+    `);
+
+    assert.equal(version, 3);
+    assert.equal(await getSchemaVersion(handle.connection), 3);
+    assert.ok(columns.some((column) => column.name === 'is_estimated'));
+    assert.deepEqual(rows, [
+      {
+        pricing_version: 'openai-gpt-4.1-2026-05',
+        is_estimated: 1,
+      },
+    ]);
+  } finally {
+    await handle.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

@@ -20,6 +20,7 @@ import {
   createPersistentOptimizationStageOrchestrator,
   createPersistentResponseCompletionOrchestrator,
 } from '../src/main/workflows/index.ts';
+import { estimateTokenCount } from '../src/main/workflows/run-helpers.ts';
 
 function createTempDatabase() {
   const directory = mkdtempSync(join(tmpdir(), 'talkin-ai-response-restoration-'));
@@ -163,6 +164,7 @@ async function readUsageRecord(dbPath: string, runId: string) {
       estimated_cost_with_optimization: number;
       pricing_version: string;
       latency_ms: number;
+      is_estimated: number;
     }>(`
       SELECT
         baseline_input_tokens,
@@ -171,7 +173,8 @@ async function readUsageRecord(dbPath: string, runId: string) {
         estimated_cost_without_optimization,
         estimated_cost_with_optimization,
         pricing_version,
-        latency_ms
+        latency_ms,
+        is_estimated
       FROM usage_records
       WHERE run_id = '${runId}';
     `);
@@ -361,7 +364,110 @@ test('story-3.4:VAL-1, story-3.4:AC-1, and story-3.4:AC-4 restore a structured E
     assert.equal(usageRecord?.output_tokens, 96);
     assert.equal(usageRecord?.latency_ms, 840);
     assert.equal(usageRecord?.pricing_version, 'openai-gpt-4.1-2026-06');
+    assert.equal(usageRecord?.is_estimated, 0);
     assert.ok((usageRecord?.baseline_input_tokens ?? 0) > 0);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-4.1:VAL-2 and story-4.1:AC-3 persist estimate-marked ledger rows when provider usage is unavailable', async () => {
+  const temp = createTempDatabase();
+  const now = createSequentialNow('2026-06-08T12:30:00.000Z');
+  const createId = createDeterministicIdFactory();
+  const optimizedEnglish =
+    'Write a support handoff checklist. Keep 42 and Talkin AI.';
+  const responseEnglish =
+    '1. Keep the 42 metric visible.\n2. Preserve the Talkin AI name.\n- [ ] Review the handoff checklist.';
+
+  try {
+    const translationAdapter = createTranslationMcpAdapter({
+      processType: 'browser',
+      runtime: createFakeTranslationMcpRuntime({
+        async optimizePrompt() {
+          return {
+            optimizedEnglish,
+            preservationChecks: {
+              entitiesPreserved: true,
+              constraintsPreserved: true,
+              outputFormatPreserved: true,
+            },
+          };
+        },
+        async restoreResponse() {
+          return {
+            restoredKorean: '이 복원 호출은 실행되면 안 됩니다.',
+          };
+        },
+      }),
+    });
+    const settingsService = createPersistentAppSettingsService({
+      dbPath: temp.dbPath,
+    });
+    await settingsService.updateSettings({
+      responseLanguage: 'en',
+    });
+    const completionOrchestrator = createPersistentResponseCompletionOrchestrator({
+      dbPath: temp.dbPath,
+      translationAdapter,
+      settingsService,
+      cloudInferenceGateway: createGateway({
+        ok: true,
+        provider: 'openai',
+        model: 'gpt-4.1',
+        responseEnglish,
+        latencyMs: 275,
+      }),
+      now,
+      createId,
+    });
+    const optimizationOrchestrator = createPersistentOptimizationStageOrchestrator({
+      dbPath: temp.dbPath,
+      translationAdapter,
+      now,
+      createId,
+      dispatchOptimizedRun(input) {
+        return completionOrchestrator.completeOptimizedRun(input);
+      },
+    });
+    const chatHistoryService = createPersistentChatHistoryService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+      optimizationStageOrchestrator: optimizationOrchestrator,
+    });
+    const submitResult = await chatHistoryService.submitPrompt({
+      promptKo:
+        [
+          '지원 운영 인수인계 메모를 길게 정리해줘.',
+          '현재 상태, 후속 조치, 리스크, 담당자 메모를 빠뜨리지 말아줘.',
+          '숫자 42와 Talkin AI를 유지하고 체크리스트로 정리해줘.',
+        ].join('\n'),
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'quality',
+    });
+
+    const completedFeed = await waitFor(
+      () =>
+        chatHistoryService.getChatFeed({
+          conversationId: submitResult.conversationId,
+        }),
+      (feed) => feed.activeRun?.status === 'completed' && feed.activeRun?.stage === 'completed',
+      'completed run with estimated provider usage',
+    );
+    const usageRecord = await readUsageRecord(temp.dbPath, submitResult.runId);
+
+    assert.equal(completedFeed.activeRun?.status, 'completed');
+    assert.ok(usageRecord);
+    assert.equal(usageRecord?.is_estimated, 1);
+    assert.equal(usageRecord?.optimized_input_tokens, estimateTokenCount(optimizedEnglish));
+    assert.equal(usageRecord?.output_tokens, estimateTokenCount(responseEnglish));
+    assert.equal(usageRecord?.latency_ms, 275);
+    assert.equal(usageRecord?.pricing_version, 'openai-gpt-4.1-2026-06');
+    assert.ok(
+      (usageRecord?.estimated_cost_without_optimization ?? 0) >
+        (usageRecord?.estimated_cost_with_optimization ?? 0),
+    );
   } finally {
     temp.cleanup();
   }

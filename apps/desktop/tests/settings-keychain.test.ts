@@ -105,7 +105,7 @@ test('story-1.4:VAL-1 persists non-secret settings in SQLite key/value rows acro
         'optimizationMode',
         'theme',
       ]);
-      assert.equal(await getSchemaVersion(handle.connection), 2);
+      assert.equal(await getSchemaVersion(handle.connection), 3);
       assert.equal(restored.defaultModel, 'claude-sonnet-4');
       assert.equal(restored.optimizationMode, 'quality');
       assert.equal(restored.theme, 'dark');

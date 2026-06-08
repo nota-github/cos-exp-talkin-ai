@@ -170,11 +170,11 @@ export function buildUsageRecordInput(input: {
     );
   }
 
+  const reportedInputTokens = input.reportedUsage?.inputTokens;
+  const reportedOutputTokens = input.reportedUsage?.outputTokens;
   const baselineInputTokens = estimateTokenCount(input.sourceKorean);
-  const optimizedInputTokens =
-    input.reportedUsage?.inputTokens ?? estimateTokenCount(input.optimizedEnglish);
-  const outputTokens =
-    input.reportedUsage?.outputTokens ?? estimateTokenCount(input.responseEnglish);
+  const optimizedInputTokens = reportedInputTokens ?? estimateTokenCount(input.optimizedEnglish);
+  const outputTokens = reportedOutputTokens ?? estimateTokenCount(input.responseEnglish);
   const estimatedCostWithoutOptimization =
     (baselineInputTokens / 1_000) * pricing.inputCostPer1kTokensUsd +
     (outputTokens / 1_000) * pricing.outputCostPer1kTokensUsd;
@@ -192,5 +192,6 @@ export function buildUsageRecordInput(input: {
     estimatedCostWithOptimization: roundUsd(estimatedCostWithOptimization),
     pricingVersion: pricing.pricingVersion,
     latencyMs: Math.max(0, Math.floor(input.latencyMs)),
+    isEstimated: reportedInputTokens === undefined || reportedOutputTokens === undefined,
   };
 }
