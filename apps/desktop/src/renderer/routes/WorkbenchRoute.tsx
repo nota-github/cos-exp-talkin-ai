@@ -1,67 +1,231 @@
-const workbenchPanels = [
-  '신규 제품 리서치',
-  '사업계획서 개요',
-  '긴 문서 요약',
-  '운영 공지 개정',
-];
+import { useEffect, useState } from 'react';
+import type { PanelSlot } from '../../shared/ipc/contracts';
+import {
+  createDesktopQueryDescriptor,
+  getDesktopQueryCache,
+  getRendererDesktopClient,
+} from '../lib/ipc/query-client';
+import { useDesktopQuery } from '../lib/ipc/query-hooks';
+import {
+  getWorkbenchSurfaceState,
+  getWorkbenchStatusLabel,
+  placeWorkbenchTaskInPreview,
+  previewWorkbenchLayout,
+  workbenchSurfaceCopy,
+} from './workbench-surface';
 
-const recentTasks = [
-  'AI 검토가 필요한 파트너 제안서',
-  '사람 검토 대기 중인 요약본',
-  '진행 중인 카피 리라이트',
-];
+const slotLabels: Record<PanelSlot, string> = {
+  'north-west': 'Panel A',
+  'north-east': 'Panel B',
+  'south-west': 'Panel C',
+  'south-east': 'Panel D',
+};
 
 export function WorkbenchRoute() {
+  const desktopClient = getRendererDesktopClient();
+  const queryCache = getDesktopQueryCache();
+  const workbenchLayoutDescriptor = createDesktopQueryDescriptor('getWorkbenchLayout', {});
+  const workbenchLayoutQuery = useDesktopQuery(
+    queryCache,
+    workbenchLayoutDescriptor,
+    { enabled: desktopClient.available },
+  );
+  const [previewLayout, setPreviewLayout] = useState(previewWorkbenchLayout);
+  const [activePanelSlot, setActivePanelSlot] = useState<PanelSlot | null>(
+    desktopClient.available ? null : previewWorkbenchLayout.activePanelSlot,
+  );
+  const [placementError, setPlacementError] = useState<string | null>(null);
+  const surfaceState = getWorkbenchSurfaceState({
+    desktopAvailable: desktopClient.available,
+    queryStatus: workbenchLayoutQuery.status,
+    layout: workbenchLayoutQuery.data,
+    previewLayout,
+    activePanelSlot,
+  });
+
+  useEffect(() => {
+    if (!surfaceState.layout?.activePanelSlot) {
+      return;
+    }
+
+    setActivePanelSlot(surfaceState.layout.activePanelSlot);
+  }, [surfaceState.layout?.activePanelSlot, surfaceState.layout?.updatedAt]);
+
+  async function handleRecentTaskSelect(taskId: string) {
+    setPlacementError(null);
+
+    if (!desktopClient.available) {
+      const nextLayout = placeWorkbenchTaskInPreview(previewLayout, taskId);
+      setPreviewLayout(nextLayout);
+      setActivePanelSlot(nextLayout.activePanelSlot);
+      return;
+    }
+
+    try {
+      const result = await desktopClient.commands.openInWorkbench({ taskId });
+      setActivePanelSlot(result.panelSlot);
+    } catch (error) {
+      setPlacementError(error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody);
+    }
+  }
+
   return (
-    <section className="screen">
+    <section className="screen screen-workbench">
       <header className="screen-header compact-header">
         <div>
           <span className="screen-kicker">Workbench</span>
-          <h1>여러 AI 작업을 동시에 관리하는 멀티채팅 작업대</h1>
-          <p>좌측 최근 작업 레일과 2x2 패널 배치를 갖춘 데스크탑 중심 화면의 placeholder입니다.</p>
+          <h1>{workbenchSurfaceCopy.headline}</h1>
+          <p>{workbenchSurfaceCopy.intro}</p>
         </div>
       </header>
 
       <div className="workbench-layout">
         <aside className="panel workbench-rail">
-          <div className="panel-header">
+          <div className="panel-header panel-header-stack">
             <div>
-              <span className="panel-kicker">최근 작업</span>
-              <h3>드래그할 작업 카드</h3>
+              <span className="panel-kicker">Recent Tasks</span>
+              <h3>{workbenchSurfaceCopy.railTitle}</h3>
+              <p>{workbenchSurfaceCopy.railDescription}</p>
             </div>
+            <span className="badge badge-muted">
+              {surfaceState.railCountLabel}
+            </span>
           </div>
 
-          <div className="task-rail">
-            {recentTasks.map((task) => (
-              <button
-                key={task}
-                type="button"
-                className="task-card"
-              >
-                <strong>{task}</strong>
-                <span>작업대에 열기 · 상태 유지</span>
-              </button>
-            ))}
-          </div>
+          {surfaceState.showLoadingState ? (
+            <article className="workbench-state-card">
+              <span className="panel-kicker">Loading</span>
+              <strong>{workbenchSurfaceCopy.railLoadingTitle}</strong>
+              <p>{workbenchSurfaceCopy.railLoadingBody}</p>
+            </article>
+          ) : null}
+
+          {surfaceState.showErrorState ? (
+            <article className="workbench-state-card workbench-state-card-error">
+              <span className="panel-kicker">Retry Safe</span>
+              <strong>{workbenchSurfaceCopy.railErrorTitle}</strong>
+              <p>{workbenchSurfaceCopy.railErrorBody}</p>
+              {workbenchLayoutQuery.error ? (
+                <span className="badge badge-muted">{workbenchLayoutQuery.error.message}</span>
+              ) : null}
+            </article>
+          ) : null}
+
+          {surfaceState.showInteractiveContent ? (
+            <div className="task-rail">
+              {surfaceState.recentTasks.map((task) => {
+                const isTaskActive =
+                  task.panelSlot !== null && task.panelSlot === surfaceState.activePanelSlot;
+
+                return (
+                  <button
+                    key={task.taskId}
+                    type="button"
+                    className={`task-card workbench-task-card${isTaskActive ? ' workbench-task-card-active' : ''}`}
+                    aria-pressed={isTaskActive}
+                    onClick={() => {
+                      void handleRecentTaskSelect(task.taskId);
+                    }}
+                  >
+                    <div className="workbench-task-title-row">
+                      <strong>{task.title}</strong>
+                      <span className={task.isOpen ? 'badge badge-primary' : 'badge badge-muted'}>
+                        {task.isOpen ? '열린 패널' : '빈 슬롯에 열기'}
+                      </span>
+                    </div>
+                    <span className="workbench-task-meta">
+                      {task.projectName} · {getWorkbenchStatusLabel(task.status)}
+                    </span>
+                    <span>{task.toolSummary}</span>
+                    <span>
+                      {task.lastActivity} · 예상 {task.savingsRate}% 절감
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </aside>
 
-        <div className="workbench-grid">
-          {workbenchPanels.map((title) => (
-            <article
-              key={title}
-              className="panel workbench-panel"
-            >
-              <div className="panel-header">
-                <div>
-                  <span className="panel-kicker">Panel</span>
-                  <h3>{title}</h3>
-                </div>
-                <span className="badge badge-muted">독립 채팅 슬롯</span>
+        <section className="workbench-stage">
+          <article className="panel workbench-stage-card">
+            <div className="panel-header">
+              <div>
+                <span className="panel-kicker">Workspace</span>
+                <h3>{workbenchSurfaceCopy.stageTitle}</h3>
+                <p>{workbenchSurfaceCopy.stageDescription}</p>
               </div>
-              <p>여기에 독립적인 대화 기록, 상태, 활동 로그, 추가 지시 입력창이 들어올 예정입니다.</p>
-            </article>
-          ))}
-        </div>
+              <span className="badge badge-primary">{surfaceState.stageBadgeLabel}</span>
+            </div>
+
+            {placementError ? (
+              <div className="workbench-inline-error">
+                <strong>{workbenchSurfaceCopy.railErrorTitle}</strong>
+                <p>{placementError}</p>
+              </div>
+            ) : null}
+
+            {surfaceState.showLoadingState ? (
+              <div className="workbench-inline-state">
+                <strong>{workbenchSurfaceCopy.railLoadingTitle}</strong>
+                <p>{workbenchSurfaceCopy.railLoadingBody}</p>
+              </div>
+            ) : null}
+
+            {surfaceState.showErrorState ? (
+              <div className="workbench-inline-state workbench-inline-state-error">
+                <strong>{workbenchSurfaceCopy.railErrorTitle}</strong>
+                <p>{workbenchSurfaceCopy.railErrorBody}</p>
+              </div>
+            ) : null}
+          </article>
+
+          {surfaceState.showInteractiveContent ? (
+            <div className="workbench-grid">
+              {surfaceState.panels.map((panel) => {
+                const isActive = panel.slot === surfaceState.activePanelSlot;
+                const taskSummary =
+                  panel.taskId !== null
+                    ? surfaceState.recentTasks.find((task) => task.taskId === panel.taskId) ?? null
+                    : null;
+
+                return (
+                  <article
+                    key={panel.slot}
+                    className={`panel workbench-panel${isActive ? ' workbench-panel-active' : ''}${panel.taskId === null ? ' workbench-panel-idle' : ''}`}
+                  >
+                    <div className="panel-header">
+                      <div>
+                        <span className="panel-kicker">{slotLabels[panel.slot]}</span>
+                        <h3>{panel.title}</h3>
+                      </div>
+                      <span className={isActive ? 'badge badge-primary' : 'badge badge-muted'}>
+                        {isActive ? '집중 패널' : getWorkbenchStatusLabel(panel.status)}
+                      </span>
+                    </div>
+
+                    <p>{panel.note}</p>
+
+                    {taskSummary ? (
+                      <div className="workbench-panel-meta">
+                        <span>{taskSummary.projectName}</span>
+                        <span>{taskSummary.toolSummary}</span>
+                        <span>
+                          {taskSummary.lastActivity} · 예상 {taskSummary.savingsRate}% 절감
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="workbench-panel-meta workbench-panel-empty-meta">
+                        <span>작업을 끌어오세요</span>
+                        <span>또는 채팅에서 바로 이어 열기</span>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+        </section>
       </div>
     </section>
   );
