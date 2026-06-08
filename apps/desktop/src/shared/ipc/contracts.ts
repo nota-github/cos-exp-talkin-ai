@@ -82,8 +82,24 @@ export type ChatFeedMessage = {
   createdAt: string;
 };
 
+export type ChatFeedRunFailureSummary = {
+  failedStage:
+    | 'queued'
+    | 'optimizing'
+    | 'optimized'
+    | 'cloud_pending'
+    | 'restoring'
+    | 'completed'
+    | 'failed'
+    | null;
+  message: string | null;
+  guidance: string | null;
+  retryable: boolean | null;
+};
+
 export type ChatFeedRunSummary = {
   runId: string;
+  sourceMessageId: string;
   status:
     | 'queued'
     | 'optimizing'
@@ -103,6 +119,8 @@ export type ChatFeedRunSummary = {
     | null;
   model: CloudModelId;
   mode: OptimizationMode;
+  errorCode: string | null;
+  failure: ChatFeedRunFailureSummary | null;
 };
 
 export type ChatFeedQuery = {

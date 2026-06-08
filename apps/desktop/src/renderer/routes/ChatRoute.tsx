@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { CloudModelId, OptimizationMode } from '../../shared/ipc/contracts';
 import {
   createDesktopQueryDescriptor,
@@ -12,12 +13,17 @@ import {
   createIdleChatSubmitState,
   createSubmittingChatSubmitState,
   createStarterDraftSelection,
+  getChatRunFeedback,
   getChatDraftPreview,
+  getRunFeedbackActionLabel,
   mergeVisibleConversationMessages,
   modelOptions,
   optimizationModeOptions,
+  resolveSourceMessageForRun,
   submitChatPromptDraft,
   type ChatStarterCard,
+  type ChatRunFeedbackActionId,
+  type ChatRunFeedback,
   type PendingChatSubmission,
   type ChatSubmitState,
 } from './chat-surface';
@@ -33,13 +39,16 @@ type ChatInboxPreview = {
 
 type ChatInboxViewProps = {
   activeStarterId: ChatStarterCard['id'] | null;
+  activeRunFeedback: ChatRunFeedback | null;
   activeTaskTitle: string | null;
   canSubmit: boolean;
   conversationMessages: PendingChatSubmission[];
   inboxPreviews: ChatInboxPreview[];
+  isRetryingRun: boolean;
   optimizationMode: OptimizationMode;
   pendingDraftPreview: string | null;
   promptDraft: string;
+  retryMessage: string | null;
   selectedModel: CloudModelId;
   shellInfo: ReturnType<typeof getRendererDesktopClient>['shell'];
   showConversationFeed: boolean;
@@ -52,18 +61,22 @@ type ChatInboxViewProps = {
   onOptimizationModeSelect: (mode: OptimizationMode) => void;
   onStarterSelect: (card: ChatStarterCard) => void;
   onModelSelect: (model: CloudModelId) => void;
+  onRunAction: (actionId: ChatRunFeedbackActionId) => void;
   onSubmit: () => void;
 };
 
 export function ChatInboxView({
   activeStarterId,
+  activeRunFeedback,
   activeTaskTitle,
   canSubmit,
   conversationMessages,
   inboxPreviews,
+  isRetryingRun,
   optimizationMode,
   pendingDraftPreview,
   promptDraft,
+  retryMessage,
   selectedModel,
   shellInfo,
   showConversationFeed,
@@ -76,6 +89,7 @@ export function ChatInboxView({
   onOptimizationModeSelect,
   onStarterSelect,
   onModelSelect,
+  onRunAction,
   onSubmit,
 }: ChatInboxViewProps) {
   const hasInboxItems = inboxPreviews.length > 0;
@@ -183,6 +197,49 @@ export function ChatInboxView({
                     : chatSurfaceCopy.guideBody}
               </p>
             </article>
+
+            {activeRunFeedback ? (
+              <article className={`run-status-card run-status-card-${activeRunFeedback.tone}`}>
+                <div className="run-status-header">
+                  <span className="badge badge-muted">{activeRunFeedback.badgeLabel}</span>
+                  <strong>{activeRunFeedback.title}</strong>
+                  <p>{activeRunFeedback.description}</p>
+                </div>
+
+                <div className="run-status-steps">
+                  {activeRunFeedback.steps.map((step) => (
+                    <span
+                      key={step.id}
+                      className={`run-status-step run-status-step-${step.state}`}
+                    >
+                      {step.label}
+                    </span>
+                  ))}
+                </div>
+
+                {activeRunFeedback.detail ? (
+                  <p className="run-status-detail">{activeRunFeedback.detail}</p>
+                ) : null}
+
+                {activeRunFeedback.actions.length > 0 ? (
+                  <div className="run-status-actions">
+                    {activeRunFeedback.actions.map((actionId) => (
+                      <button
+                        key={actionId}
+                        type="button"
+                        className={actionId === 'retry' ? 'primary-button run-action-button' : 'soft-button'}
+                        onClick={() => onRunAction(actionId)}
+                        disabled={isRetryingRun}
+                      >
+                        {getRunFeedbackActionLabel(actionId)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {retryMessage ? <p className="run-status-note">{retryMessage}</p> : null}
+              </article>
+            ) : null}
 
             {!showConversationFeed ? (
               <article className="inbox-guide-card">
@@ -292,6 +349,7 @@ export function ChatInboxView({
 }
 
 export function ChatRoute() {
+  const navigate = useNavigate();
   const desktopClient = getRendererDesktopClient();
   const queryCache = getDesktopQueryCache();
   const chatFeedDescriptor = createDesktopQueryDescriptor('getChatFeed', {});
@@ -308,10 +366,20 @@ export function ChatRoute() {
   const [activeStarterId, setActiveStarterId] = useState<ChatStarterCard['id'] | null>(null);
   const [submitState, setSubmitState] = useState<ChatSubmitState>(createIdleChatSubmitState);
   const [pendingSubmission, setPendingSubmission] = useState<PendingChatSubmission | null>(null);
+  const [retryState, setRetryState] = useState<{
+    status: 'idle' | 'retrying' | 'error';
+    message: string | null;
+  }>({
+    status: 'idle',
+    message: null,
+  });
 
   const inboxPreviews = chatFeedQuery.data?.items ?? [];
   const persistedMessages = chatFeedQuery.data?.messages ?? [];
+  const activeRun = chatFeedQuery.data?.activeRun ?? null;
   const conversationMessages = mergeVisibleConversationMessages(persistedMessages, pendingSubmission);
+  const activeRunFeedback = getChatRunFeedback(activeRun);
+  const activeRunSourceMessage = resolveSourceMessageForRun(conversationMessages, activeRun);
   const pendingDraftPreview =
     submitState.status === 'submitting' && promptDraft.trim().length > 0 ? promptDraft : null;
   const showConversationFeed =
@@ -321,6 +389,10 @@ export function ChatRoute() {
     promptDraft.trim().length > 0 &&
     submitState.status !== 'submitting';
   const showLoadingState = desktopClient.available && chatFeedQuery.status === 'loading' && !chatFeedQuery.data;
+  const shouldPollActiveRun =
+    activeRun !== null &&
+    activeRun.status !== 'completed' &&
+    activeRun.status !== 'failed';
 
   useEffect(() => {
     if (!pendingSubmission) {
@@ -331,6 +403,29 @@ export function ChatRoute() {
       setPendingSubmission(null);
     }
   }, [pendingSubmission, persistedMessages]);
+
+  useEffect(() => {
+    if (!desktopClient.available || !shouldPollActiveRun) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void queryCache.fetchQuery(chatFeedDescriptor).catch(() => undefined);
+    }, 900);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [chatFeedDescriptor.key, desktopClient.available, queryCache, shouldPollActiveRun]);
+
+  useEffect(() => {
+    if (!activeRun || activeRun.status !== 'failed') {
+      setRetryState({
+        status: 'idle',
+        message: null,
+      });
+    }
+  }, [activeRun?.runId, activeRun?.status]);
 
   function resetSubmitState() {
     setSubmitState(createIdleChatSubmitState());
@@ -351,6 +446,21 @@ export function ChatRoute() {
     if (submitState.status !== 'idle' || submitState.message) {
       resetSubmitState();
     }
+  }
+
+  function handleRetryWithAnotherModel() {
+    if (!activeRunSourceMessage) {
+      return;
+    }
+
+    setPromptDraft(activeRunSourceMessage.contentKo);
+    setActiveStarterId(null);
+    setPendingSubmission(null);
+    setSubmitState({
+      status: 'idle',
+      message: chatSurfaceCopy.modelRetryPrefillMessage,
+    });
+    textareaRef.current?.focus();
   }
 
   async function handleSubmit() {
@@ -378,16 +488,56 @@ export function ChatRoute() {
     }
   }
 
+  async function handleRetryRun() {
+    if (!desktopClient.available || !activeRun || retryState.status === 'retrying') {
+      return;
+    }
+
+    setRetryState({
+      status: 'retrying',
+      message: chatSurfaceCopy.runRetryingMessage,
+    });
+
+    try {
+      await desktopClient.commands.retryRun({
+        runId: activeRun.runId,
+      });
+      await queryCache.fetchQuery(chatFeedDescriptor);
+    } catch {
+      setRetryState({
+        status: 'error',
+        message: chatSurfaceCopy.runRetryFailedMessage,
+      });
+    }
+  }
+
+  function handleRunAction(actionId: ChatRunFeedbackActionId) {
+    switch (actionId) {
+      case 'retry':
+        void handleRetryRun();
+        return;
+      case 'open_settings':
+        navigate('/settings');
+        return;
+      case 'select_other_model':
+        handleRetryWithAnotherModel();
+        return;
+    }
+  }
+
   return (
     <ChatInboxView
       activeStarterId={activeStarterId}
+      activeRunFeedback={activeRunFeedback}
       activeTaskTitle={chatFeedQuery.data?.activeTaskTitle ?? null}
       canSubmit={canSubmit}
       conversationMessages={conversationMessages}
       inboxPreviews={inboxPreviews}
+      isRetryingRun={retryState.status === 'retrying'}
       optimizationMode={optimizationMode}
       pendingDraftPreview={pendingDraftPreview}
       promptDraft={promptDraft}
+      retryMessage={retryState.message}
       selectedModel={selectedModel}
       shellInfo={shellInfo}
       showConversationFeed={showConversationFeed}
@@ -400,6 +550,7 @@ export function ChatRoute() {
       onOptimizationModeSelect={setOptimizationMode}
       onStarterSelect={handleStarterSelect}
       onModelSelect={setSelectedModel}
+      onRunAction={handleRunAction}
       onSubmit={() => {
         void handleSubmit();
       }}

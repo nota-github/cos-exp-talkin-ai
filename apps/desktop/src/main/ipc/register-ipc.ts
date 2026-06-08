@@ -210,10 +210,13 @@ function createInitialState(): DesktopIpcState {
       ],
       activeRun: {
         runId: 'run-001',
+        sourceMessageId: 'msg-001',
         status: 'queued',
         stage: 'queued',
         model: primaryTask.model,
         mode: primaryTask.mode,
+        errorCode: null,
+        failure: null,
       },
     },
     workbenchLayout: {
@@ -392,10 +395,13 @@ function stageSubmittedPromptInState(
   };
   const nextRun: ChatFeedRunSummary = {
     runId: ids.runId,
+    sourceMessageId: ids.messageId,
     status: 'queued',
     stage: 'queued',
     model: request.selectedModel,
     mode: request.optimizationMode,
+    errorCode: null,
+    failure: null,
   };
 
   draftState.tasks[ids.taskId] = {
@@ -445,6 +451,42 @@ function stageSubmittedPromptInState(
   draftState.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
   draftState.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
   draftState.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
+}
+
+function stageRetriedRunInState(
+  draftState: DesktopIpcState,
+  request: DesktopCommandRequest<'retryRun'>,
+  result: DesktopCommandResponse<'retryRun'>,
+) {
+  const entry = ensureHistoryEntry(draftState, request.runId);
+  const sourceMessage =
+    draftState.chatFeed.messages.find((message) => message.messageId === draftState.chatFeed.activeRun?.sourceMessageId) ??
+    draftState.chatFeed.messages.find(
+      (message) => message.runId === request.runId && message.role === 'user',
+    ) ??
+    draftState.chatFeed.messages.find((message) => message.role === 'user') ??
+    null;
+  const sourceMessageId = sourceMessage?.messageId ?? `msg-${String(draftState.nextIds.message).padStart(3, '0')}`;
+  const model = draftState.chatFeed.activeRun?.model ?? entry.provider;
+  const mode = draftState.chatFeed.activeRun?.mode ?? 'balanced';
+
+  draftState.chatFeed.activeRun = {
+    runId: result.runId,
+    sourceMessageId,
+    status: 'queued',
+    stage: 'queued',
+    model,
+    mode,
+    errorCode: null,
+    failure: null,
+  };
+
+  draftState.historyEntries[result.runId] = {
+    ...entry,
+    runId: result.runId,
+    restoredResponseKo:
+      '재시도 요청이 접수되었습니다. 이전 한국어 입력과 기존 응답은 그대로 유지됩니다.',
+  };
 }
 
 function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardColumnsResult {
@@ -663,25 +705,53 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       }),
     retryRun: async (request) =>
       commitCommandMutation('retryRun', async (draftState) => {
-        const entry = ensureHistoryEntry(draftState, request.runId);
+        if (chatHistoryService) {
+          return {
+            commit: async () => chatHistoryService.retryRun(request),
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'run',
+                ids: [request.runId],
+              },
+              {
+                kind: 'projection',
+                projection: 'chatFeed',
+              },
+              {
+                kind: 'projection',
+                projection: 'historyEntry',
+              },
+            ],
+          };
+        }
 
-        entry.restoredResponseKo = '재시도 요청이 접수되었습니다. 이전 한국어 입력은 그대로 유지됩니다.';
+        const retryRunId = `run-${String(draftState.nextIds.run).padStart(3, '0')}`;
+        draftState.nextIds.run += 1;
+        stageRetriedRunInState(draftState, request, {
+          runId: retryRunId,
+          acceptedStatus: 'queued' as const,
+        });
 
         return {
           result: {
-            runId: request.runId,
+            runId: retryRunId,
             acceptedStatus: 'queued' as const,
           },
           targets: [
             {
               kind: 'entity',
               entity: 'run',
-              ids: [request.runId],
+              ids: [request.runId, retryRunId],
+            },
+            {
+              kind: 'projection',
+              projection: 'chatFeed',
             },
             {
               kind: 'projection',
               projection: 'historyEntry',
-              keys: [request.runId],
+              keys: [request.runId, retryRunId],
             },
           ],
         };
