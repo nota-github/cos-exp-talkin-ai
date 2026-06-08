@@ -65,20 +65,8 @@ function createPreviewPanels(): WorkbenchPanel[] {
       status: 'ai_review',
       note: '리서치 요약 패널',
     },
-    {
-      slot: 'south-west',
-      taskId: null,
-      title: '새 작업을 열어보세요',
-      status: 'idle',
-      note: '작업을 끌어오거나 새 채팅을 시작하세요',
-    },
-    {
-      slot: 'south-east',
-      taskId: null,
-      title: '새 작업을 열어보세요',
-      status: 'idle',
-      note: '현재 비어 있는 독립 채팅 슬롯',
-    },
+    createPreviewEmptyPanel('south-west'),
+    createPreviewEmptyPanel('south-east'),
   ];
 }
 
@@ -87,6 +75,36 @@ function createPreviewRecentTasks(): WorkbenchRecentTask[] {
     ...task,
     isOpen: task.panelSlot !== null,
   }));
+}
+
+export const workbenchSlotLabels: Record<PanelSlot, string> = {
+  'north-west': 'Panel A',
+  'north-east': 'Panel B',
+  'south-west': 'Panel C',
+  'south-east': 'Panel D',
+};
+
+function createPreviewEmptyPanel(slot: PanelSlot): WorkbenchPanel {
+  const titleBySlot: Record<PanelSlot, string> = {
+    'north-west': '작업을 끌어오세요',
+    'north-east': '새 채팅을 열어보세요',
+    'south-west': '다른 작업을 병렬로 두세요',
+    'south-east': '빈 슬롯을 유지해도 됩니다',
+  };
+  const noteBySlot: Record<PanelSlot, string> = {
+    'north-west': '최근 작업 레일에서 원하는 task를 선택해 독립 패널로 여세요',
+    'north-east': '새 채팅이나 최근 task를 이 슬롯에 배치할 수 있습니다',
+    'south-west': '리서치, 초안, 검토 작업을 서로 다른 패널로 분리하세요',
+    'south-east': '필요할 때 바로 이어 붙일 수 있도록 비워 둔 작업 공간입니다',
+  };
+
+  return {
+    slot,
+    taskId: null,
+    title: titleBySlot[slot],
+    status: 'idle',
+    note: noteBySlot[slot],
+  };
 }
 
 export const workbenchSurfaceCopy = {
@@ -99,6 +117,8 @@ export const workbenchSurfaceCopy = {
   railLoadingBody: '작업대 레일과 패널 상태를 같은 source of truth에서 다시 불러오는 중입니다.',
   railErrorTitle: '작업대를 불러오지 못했습니다',
   railErrorBody: '채팅에서 다시 이어 열거나 잠시 후 작업대를 새로 열어 보세요.',
+  railEmptyTitle: '아직 열린 task가 없습니다',
+  railEmptyBody: '먼저 채팅에서 작업을 만들거나 아래 빈 패널로 새 대화를 시작해 보세요.',
   stageTitle: '활성 패널',
   stageDescription:
     '왼쪽 레일은 어떤 task를 다룰지 고르는 곳이고, 오른쪽 패널은 실제 대화와 상태를 이어가는 작업 공간입니다.',
@@ -216,6 +236,113 @@ export function placeWorkbenchTaskInPreview(
             note: `${task.projectName} · ${task.toolSummary}`,
           }
         : panel,
+    ),
+  };
+}
+
+export function moveWorkbenchPanelInPreview(
+  layout: WorkbenchLayoutResult,
+  fromPanelSlot: PanelSlot,
+  toPanelSlot: PanelSlot,
+): WorkbenchLayoutResult {
+  if (fromPanelSlot === toPanelSlot) {
+    return layout;
+  }
+
+  const sourcePanel = layout.panels.find((panel) => panel.slot === fromPanelSlot);
+  const targetPanel = layout.panels.find((panel) => panel.slot === toPanelSlot);
+
+  if (!sourcePanel?.taskId || !targetPanel) {
+    return layout;
+  }
+
+  const sourceTask = layout.recentTasks.find((task) => task.taskId === sourcePanel.taskId) ?? null;
+  const targetTask = targetPanel.taskId
+    ? layout.recentTasks.find((task) => task.taskId === targetPanel.taskId) ?? null
+    : null;
+
+  return {
+    ...layout,
+    updatedAt: '2026-06-08T01:20:00.000Z',
+    activePanelSlot: toPanelSlot,
+    recentTasks: layout.recentTasks.map((task) => {
+      if (task.taskId === sourcePanel.taskId) {
+        return {
+          ...task,
+          panelSlot: toPanelSlot,
+          isOpen: true,
+        };
+      }
+
+      if (targetTask && task.taskId === targetTask.taskId) {
+        return {
+          ...task,
+          panelSlot: fromPanelSlot,
+          isOpen: true,
+        };
+      }
+
+      return task;
+    }),
+    panels: layout.panels.map((panel) => {
+      if (panel.slot === fromPanelSlot) {
+        if (!targetTask) {
+          return createPreviewEmptyPanel(fromPanelSlot);
+        }
+
+        return {
+          slot: fromPanelSlot,
+          taskId: targetTask.taskId,
+          title: targetTask.title,
+          status: targetTask.status,
+          note: `${targetTask.projectName} · ${targetTask.toolSummary}`,
+        };
+      }
+
+      if (panel.slot === toPanelSlot && sourceTask) {
+        return {
+          slot: toPanelSlot,
+          taskId: sourceTask.taskId,
+          title: sourceTask.title,
+          status: sourceTask.status,
+          note: `${sourceTask.projectName} · ${sourceTask.toolSummary}`,
+        };
+      }
+
+      return panel;
+    }),
+  };
+}
+
+export function closeWorkbenchPanelInPreview(
+  layout: WorkbenchLayoutResult,
+  panelSlot: PanelSlot,
+): WorkbenchLayoutResult {
+  const targetPanel = layout.panels.find((panel) => panel.slot === panelSlot);
+
+  if (!targetPanel?.taskId) {
+    return layout;
+  }
+
+  const remainingOpenPanel = layout.panels.find(
+    (panel) => panel.slot !== panelSlot && panel.taskId !== null,
+  );
+
+  return {
+    ...layout,
+    updatedAt: '2026-06-08T01:21:00.000Z',
+    activePanelSlot: remainingOpenPanel?.slot ?? null,
+    recentTasks: layout.recentTasks.map((task) =>
+      task.taskId === targetPanel.taskId
+        ? {
+            ...task,
+            panelSlot: null,
+            isOpen: false,
+          }
+        : task,
+    ),
+    panels: layout.panels.map((panel) =>
+      panel.slot === panelSlot ? createPreviewEmptyPanel(panelSlot) : panel,
     ),
   };
 }

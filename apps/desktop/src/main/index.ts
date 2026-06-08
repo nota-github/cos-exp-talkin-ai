@@ -10,6 +10,7 @@ import {
   createStdioTranslationMcpRuntime,
   createTranslationMcpAdapter,
 } from './translation/index.ts';
+import { createPersistentWorkbenchService } from './workbench/index.ts';
 import { createMainWindowOptions } from './window-config';
 import {
   createPersistentOptimizationStageOrchestrator,
@@ -33,6 +34,9 @@ function registerIpcHandlers() {
     dbPath,
   });
   const historyInspectionService = createPersistentHistoryInspectionService({
+    dbPath,
+  });
+  const workbenchService = createPersistentWorkbenchService({
     dbPath,
   });
   const secretService = createPersistentSecretService({});
@@ -75,6 +79,7 @@ function registerIpcHandlers() {
     settingsService,
     translationAdapter,
     usageDashboardService,
+    workbenchService,
   });
 
   ipcHandlersRegistered = true;

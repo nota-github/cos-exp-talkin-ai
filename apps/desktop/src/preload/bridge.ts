@@ -50,6 +50,10 @@ export function createTalkinAIDesktopApi(
         submitPrompt: (request) => invokeCommand(ipcRenderer, 'submitPrompt', request),
         retryRun: (request) => invokeCommand(ipcRenderer, 'retryRun', request),
         openInWorkbench: (request) => invokeCommand(ipcRenderer, 'openInWorkbench', request),
+        moveWorkbenchPanel: (request) =>
+          invokeCommand(ipcRenderer, 'moveWorkbenchPanel', request),
+        closeWorkbenchPanel: (request) =>
+          invokeCommand(ipcRenderer, 'closeWorkbenchPanel', request),
         moveTaskStatus: (request) => invokeCommand(ipcRenderer, 'moveTaskStatus', request),
         updateSettings: (request) => invokeCommand(ipcRenderer, 'updateSettings', request),
       },

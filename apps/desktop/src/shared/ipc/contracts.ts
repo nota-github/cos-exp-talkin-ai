@@ -2,6 +2,8 @@ export const commandNames = [
   'submitPrompt',
   'retryRun',
   'openInWorkbench',
+  'moveWorkbenchPanel',
+  'closeWorkbenchPanel',
   'moveTaskStatus',
   'updateSettings',
 ] as const;
@@ -31,6 +33,8 @@ export const ipcChannels: {
     submitPrompt: 'talkin-ai:command:submitPrompt',
     retryRun: 'talkin-ai:command:retryRun',
     openInWorkbench: 'talkin-ai:command:openInWorkbench',
+    moveWorkbenchPanel: 'talkin-ai:command:moveWorkbenchPanel',
+    closeWorkbenchPanel: 'talkin-ai:command:closeWorkbenchPanel',
     moveTaskStatus: 'talkin-ai:command:moveTaskStatus',
     updateSettings: 'talkin-ai:command:updateSettings',
   },
@@ -366,6 +370,28 @@ export type OpenInWorkbenchResult = {
   panelSlot: PanelSlot;
 };
 
+export type MoveWorkbenchPanelCommand = {
+  fromPanelSlot: PanelSlot;
+  toPanelSlot: PanelSlot;
+};
+
+export type MoveWorkbenchPanelResult = {
+  layoutId: string;
+  taskId: string;
+  panelSlot: PanelSlot;
+};
+
+export type CloseWorkbenchPanelCommand = {
+  panelSlot: PanelSlot;
+};
+
+export type CloseWorkbenchPanelResult = {
+  layoutId: string;
+  panelSlot: PanelSlot;
+  closedTaskId: string | null;
+  activePanelSlot: PanelSlot | null;
+};
+
 export type MoveTaskStatusCommand = {
   taskId: string;
   status: TaskStatus;
@@ -397,6 +423,14 @@ export type DesktopCommandDefinitions = {
   openInWorkbench: {
     request: OpenInWorkbenchCommand;
     response: OpenInWorkbenchResult;
+  };
+  moveWorkbenchPanel: {
+    request: MoveWorkbenchPanelCommand;
+    response: MoveWorkbenchPanelResult;
+  };
+  closeWorkbenchPanel: {
+    request: CloseWorkbenchPanelCommand;
+    response: CloseWorkbenchPanelResult;
   };
   moveTaskStatus: {
     request: MoveTaskStatusCommand;

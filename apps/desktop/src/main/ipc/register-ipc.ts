@@ -23,7 +23,10 @@ import {
   type WorkbenchPanel,
   type WorkbenchLayoutResult,
 } from '../../shared/ipc/contracts';
-import { resolveWorkbenchPanelSlot } from '../../shared/ipc/workbench.ts';
+import {
+  resolveWorkbenchPanelSlot,
+  workbenchPanelSlots,
+} from '../../shared/ipc/workbench.ts';
 import type { ChatHistoryService } from '../chat/index.ts';
 import type { HistoryInspectionService } from '../history/index.ts';
 import {
@@ -33,6 +36,7 @@ import {
 } from '../settings/index.ts';
 import type { TranslationMcpAdapter } from '../translation/index.ts';
 import type { UsageDashboardService } from '../usage/index.ts';
+import type { WorkbenchService } from '../workbench/index.ts';
 
 type InternalTaskRecord = {
   taskId: string;
@@ -107,6 +111,7 @@ export type RegisterDesktopIpcOptions = {
   settingsService?: AppSettingsService;
   translationAdapter?: TranslationMcpAdapter;
   usageDashboardService?: UsageDashboardService;
+  workbenchService?: WorkbenchService;
 };
 
 export type DesktopIpcService = {
@@ -135,12 +140,7 @@ const boardColumnTitles: Record<TaskStatus, string> = {
   completed: '완료',
 };
 
-const panelSlots: PanelSlot[] = [
-  'north-west',
-  'north-east',
-  'south-west',
-  'south-east',
-];
+const panelSlots: PanelSlot[] = [...workbenchPanelSlots];
 
 const usageDashboardCategoryLabels = {
   general: '일반 요청',
@@ -579,6 +579,10 @@ function buildWorkbenchLayoutFromState(state: DesktopIpcState): WorkbenchLayoutR
   };
 }
 
+function getInMemoryNextActiveWorkbenchSlot(panels: WorkbenchPanel[]): PanelSlot | null {
+  return panels.find((panel) => panel.taskId !== null)?.slot ?? null;
+}
+
 function buildHistoryFeedFromState(state: DesktopIpcState): HistoryFeedResult {
   return {
     items: Object.values(state.historyEntries)
@@ -841,6 +845,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
   const translationAdapter = options.translationAdapter ?? null;
   const usageDashboardService = options.usageDashboardService ?? null;
+  const workbenchService = options.workbenchService ?? null;
 
   async function resolvePreparedMutationResult<TResult>(
     outcome: PreparedMutationResult<TResult>,
@@ -1049,6 +1054,23 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       }),
     openInWorkbench: async (request) =>
       commitCommandMutation('openInWorkbench', async (draftState) => {
+        if (workbenchService) {
+          return {
+            commit: async () => workbenchService.openInWorkbench(request),
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'task',
+                ids: [request.taskId],
+              },
+              {
+                kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+            ],
+          };
+        }
+
         const task = ensureTask(draftState, request.taskId);
         const slot = resolveWorkbenchPanelSlot({
           panels: draftState.workbenchLayout.panels,
@@ -1083,6 +1105,115 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               entity: 'task',
               ids: [task.taskId],
             },
+            {
+              kind: 'projection',
+              projection: 'workbenchLayout',
+              keys: [draftState.workbenchLayout.layoutId],
+            },
+          ],
+        };
+      }),
+    moveWorkbenchPanel: async (request) =>
+      commitCommandMutation('moveWorkbenchPanel', async (draftState) => {
+        if (workbenchService) {
+          return {
+            commit: async () => workbenchService.moveWorkbenchPanel(request),
+            targets: [
+              {
+                kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+            ],
+          };
+        }
+
+        const sourcePanel = draftState.workbenchLayout.panels.find(
+          (panel) => panel.slot === request.fromPanelSlot,
+        );
+        const targetPanel = draftState.workbenchLayout.panels.find(
+          (panel) => panel.slot === request.toPanelSlot,
+        );
+
+        if (!sourcePanel?.taskId) {
+          throw new Error('이동할 패널 작업이 없습니다.');
+        }
+
+        if (!targetPanel) {
+          throw new Error(`Unknown panel slot: ${request.toPanelSlot}`);
+        }
+
+        const movedTask = ensureTask(draftState, sourcePanel.taskId);
+        const swappedTask = targetPanel.taskId ? ensureTask(draftState, targetPanel.taskId) : null;
+
+        sourcePanel.taskId = swappedTask?.taskId ?? null;
+        sourcePanel.title = swappedTask?.title ?? '새 작업을 열어보세요';
+        sourcePanel.status = swappedTask?.status ?? 'idle';
+        sourcePanel.note = swappedTask
+          ? `최근 활동 ${swappedTask.lastActivity} · ${swappedTask.projectName}`
+          : '작업을 끌어오거나 새 채팅을 시작하세요';
+
+        targetPanel.taskId = movedTask.taskId;
+        targetPanel.title = movedTask.title;
+        targetPanel.status = movedTask.status;
+        targetPanel.note = `최근 활동 ${movedTask.lastActivity} · ${movedTask.projectName}`;
+        draftState.workbenchLayout.activePanelSlot = request.toPanelSlot;
+        draftState.workbenchLayout.updatedAt = nowIso();
+
+        return {
+          result: {
+            layoutId: draftState.workbenchLayout.layoutId,
+            taskId: movedTask.taskId,
+            panelSlot: request.toPanelSlot,
+          },
+          targets: [
+            {
+              kind: 'projection',
+              projection: 'workbenchLayout',
+              keys: [draftState.workbenchLayout.layoutId],
+            },
+          ],
+        };
+      }),
+    closeWorkbenchPanel: async (request) =>
+      commitCommandMutation('closeWorkbenchPanel', async (draftState) => {
+        if (workbenchService) {
+          return {
+            commit: async () => workbenchService.closeWorkbenchPanel(request),
+            targets: [
+              {
+                kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+            ],
+          };
+        }
+
+        const panel = draftState.workbenchLayout.panels.find(
+          (currentPanel) => currentPanel.slot === request.panelSlot,
+        );
+
+        if (!panel) {
+          throw new Error(`Unknown panel slot: ${request.panelSlot}`);
+        }
+
+        const closedTaskId = panel.taskId;
+        panel.taskId = null;
+        panel.title = '새 작업을 열어보세요';
+        panel.status = 'idle';
+        panel.note = '작업을 끌어오거나 새 채팅을 시작하세요';
+        draftState.workbenchLayout.activePanelSlot = getInMemoryNextActiveWorkbenchSlot(
+          draftState.workbenchLayout.panels,
+        );
+        draftState.workbenchLayout.updatedAt = nowIso();
+
+        return {
+          result: {
+            layoutId: draftState.workbenchLayout.layoutId,
+            panelSlot: request.panelSlot,
+            closedTaskId,
+            activePanelSlot: draftState.workbenchLayout.activePanelSlot,
+          },
+          targets: [
             {
               kind: 'projection',
               projection: 'workbenchLayout',
@@ -1178,7 +1309,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
             ...clone(state.chatFeed),
             activeConversationId: request.conversationId ?? state.chatFeed.activeConversationId,
           },
-    getWorkbenchLayout: async () => buildWorkbenchLayoutFromState(state),
+    getWorkbenchLayout: async (request) =>
+      workbenchService
+        ? workbenchService.getWorkbenchLayout(request)
+        : buildWorkbenchLayoutFromState(state),
     getBoardColumns: async () => clone(state.boardColumns),
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
     getUsageDashboard: async (request) =>
