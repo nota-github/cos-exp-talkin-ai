@@ -764,6 +764,21 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
         return rows.map((row) => mapRunRecordRow(row) as RunRecord);
       },
 
+      async listByStatuses(statuses) {
+        if (statuses.length === 0) {
+          return [];
+        }
+
+        const rows = await connection.query<RunRecordRow>(`
+          SELECT *
+          FROM run_records
+          WHERE status IN (${statuses.map((status) => sqlValue(status)).join(', ')})
+          ORDER BY started_at ASC, rowid ASC;
+        `);
+
+        return rows.map((row) => mapRunRecordRow(row) as RunRecord);
+      },
+
       async updateStatus(input) {
         await connection.exec(`
           UPDATE run_records

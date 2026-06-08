@@ -292,6 +292,10 @@ function classifyRunFailure(errorCode: string | null) {
     return 'invalid_request';
   }
 
+  if (errorCode === 'interrupted_after_dispatch') {
+    return 'interrupted_after_dispatch';
+  }
+
   return 'unknown';
 }
 
@@ -373,6 +377,8 @@ function buildFailureDescription(run: ChatFeedRunSummary) {
     case 'provider_network':
     case 'provider_unavailable':
       return '잠시 후 다시 시도하거나 다른 모델로 이어가는 편이 안전합니다.';
+    case 'interrupted_after_dispatch':
+      return '클라우드 모델로 이미 보냈을 수 있어 자동 재개하지 않았습니다. 내용을 확인한 뒤 명시적으로 다시 시도하세요.';
     case 'invalid_request':
       return '모델을 바꾸거나 요청 방향을 조정한 뒤 다시 보내는 편이 안전합니다.';
     case 'unknown':
@@ -393,6 +399,7 @@ function buildFailureActions(run: ChatFeedRunSummary): ChatRunFeedbackActionId[]
       failureKind === 'provider_rate_limit' ||
       failureKind === 'provider_network' ||
       failureKind === 'provider_unavailable' ||
+      failureKind === 'interrupted_after_dispatch' ||
       failureKind === 'unknown')
   ) {
     actions.push('retry');
@@ -412,6 +419,7 @@ function buildFailureActions(run: ChatFeedRunSummary): ChatRunFeedbackActionId[]
     failureKind === 'provider_rate_limit' ||
     failureKind === 'provider_network' ||
     failureKind === 'provider_unavailable' ||
+    failureKind === 'interrupted_after_dispatch' ||
     failureKind === 'invalid_request'
   ) {
     actions.push('select_other_model');
