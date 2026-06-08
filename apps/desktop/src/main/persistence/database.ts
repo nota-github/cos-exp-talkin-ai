@@ -231,6 +231,7 @@ class SqliteCliConnection implements SqliteConnection {
 .headers off
 .mode json
 PRAGMA foreign_keys = ON;
+PRAGMA busy_timeout = 5000;
     `);
   }
 

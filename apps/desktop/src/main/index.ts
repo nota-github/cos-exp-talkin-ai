@@ -2,13 +2,18 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
 import { createPersistentChatHistoryService } from './chat/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
+import { createPersistentSecretService } from './keychain/index.ts';
+import { createCloudInferenceGateway } from './providers/index.ts';
 import { createPersistentAppSettingsService } from './settings/index.ts';
 import {
   createStdioTranslationMcpRuntime,
   createTranslationMcpAdapter,
 } from './translation/index.ts';
 import { createMainWindowOptions } from './window-config';
-import { createPersistentOptimizationStageOrchestrator } from './workflows/index.ts';
+import {
+  createPersistentOptimizationStageOrchestrator,
+  createPersistentResponseCompletionOrchestrator,
+} from './workflows/index.ts';
 
 let mainWindow: BrowserWindow | null = null;
 let ipcHandlersRegistered = false;
@@ -19,11 +24,33 @@ function registerIpcHandlers() {
   }
 
   const dbPath = join(app.getPath('userData'), 'talkin-ai.db');
+  const settingsService = createPersistentAppSettingsService({
+    dbPath,
+  });
+  const secretService = createPersistentSecretService({});
   const translationAdapter = createTranslationMcpAdapter({
     runtime: createStdioTranslationMcpRuntime({
       command:
         process.env.TALKIN_AI_TRANSLATION_MCP_COMMAND ?? 'talkin-ai-translation-mcp',
     }),
+  });
+  const cloudInferenceGateway = createCloudInferenceGateway({
+    processType: 'browser',
+    secretService,
+    settingsService,
+  });
+  const responseCompletionOrchestrator = createPersistentResponseCompletionOrchestrator({
+    dbPath,
+    cloudInferenceGateway,
+    translationAdapter,
+    settingsService,
+  });
+  const optimizationStageOrchestrator = createPersistentOptimizationStageOrchestrator({
+    dbPath,
+    translationAdapter,
+    dispatchOptimizedRun(input) {
+      return responseCompletionOrchestrator.completeOptimizedRun(input);
+    },
   });
 
   registerDesktopIpcHandlers(ipcMain, {
@@ -34,14 +61,9 @@ function registerIpcHandlers() {
     },
     chatHistoryService: createPersistentChatHistoryService({
       dbPath,
-      optimizationStageOrchestrator: createPersistentOptimizationStageOrchestrator({
-        dbPath,
-        translationAdapter,
-      }),
+      optimizationStageOrchestrator,
     }),
-    settingsService: createPersistentAppSettingsService({
-      dbPath,
-    }),
+    settingsService,
     translationAdapter,
   });
 

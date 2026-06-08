@@ -16,6 +16,7 @@ export const defaultAppSettings: AppSettings = {
 
 const cloudModelIds = ['gpt-4.1', 'claude-sonnet-4', 'gemini-1.5-pro'] as const;
 const optimizationModes = ['balanced', 'savings', 'quality', 'long_context'] as const;
+const responseLanguages = ['ko', 'en'] as const;
 const themeModes = ['light', 'dark', 'system'] as const;
 const appSettingKeys = Object.keys(defaultAppSettings) as Array<keyof AppSettings>;
 
@@ -68,7 +69,7 @@ function isValidSettingValue<TKey extends SettingKey>(
     case 'optimizationMode':
       return isOneOf(value, optimizationModes);
     case 'responseLanguage':
-      return value === 'ko';
+      return isOneOf(value, responseLanguages);
     case 'theme':
       return isOneOf(value, themeModes);
     case 'advancedPromptPreview':
