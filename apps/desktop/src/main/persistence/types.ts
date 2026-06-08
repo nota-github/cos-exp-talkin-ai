@@ -211,9 +211,13 @@ export type RecentTaskRecord = {
 export type BoardTaskCardRecord = {
   taskId: string;
   title: string;
+  status: TaskStatus;
   projectId: string | null;
   projectName: string | null;
   lastActivityAt: string;
+  conversationId: string | null;
+  selectedModel: CloudModelId | null;
+  mode: OptimizationMode | null;
 };
 
 export type BoardColumnRecord = {

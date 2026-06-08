@@ -198,9 +198,12 @@ export type WorkbenchLayoutResult = {
 
 export type BoardTaskCard = {
   taskId: string;
+  conversationId: string | null;
   title: string;
+  status: TaskStatus;
   projectName: string;
   lastActivity: string;
+  lastActivityAt: string;
   toolSummary: string;
 };
 

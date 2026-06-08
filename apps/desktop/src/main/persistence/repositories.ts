@@ -178,6 +178,9 @@ type BoardCardRow = {
   project_id: string | null;
   project_name: string | null;
   last_activity_at: string;
+  conversation_id: string | null;
+  selected_model: ConversationRecord['selectedModel'] | null;
+  mode: ConversationRecord['mode'] | null;
 };
 
 type SqlPrimitive = string | number | null;
@@ -467,9 +470,13 @@ function mapBoardCardRow(row: BoardCardRow) {
   return {
     taskId: row.task_id,
     title: row.title,
+    status: row.status,
     projectId: row.project_id,
     projectName: row.project_name,
     lastActivityAt: row.last_activity_at,
+    conversationId: row.conversation_id,
+    selectedModel: row.selected_model,
+    mode: row.mode,
   };
 }
 
@@ -1163,9 +1170,20 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
             t.status,
             t.project_id,
             p.name AS project_name,
-            t.last_activity_at
+            t.last_activity_at,
+            c.id AS conversation_id,
+            c.selected_model AS selected_model,
+            c.mode AS mode
           FROM tasks t
           LEFT JOIN projects p ON p.id = t.project_id
+          LEFT JOIN conversations c
+            ON c.id = (
+              SELECT candidate.id
+              FROM conversations AS candidate
+              WHERE candidate.task_id = t.id
+              ORDER BY candidate.created_at DESC
+              LIMIT 1
+            )
           ORDER BY ${taskStatusOrderSql('t.status')} ASC, t.last_activity_at DESC;
         `);
 
