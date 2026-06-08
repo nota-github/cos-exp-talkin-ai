@@ -159,6 +159,19 @@ export type WorkbenchPanel = {
   note: string;
 };
 
+export type WorkbenchRecentTask = {
+  taskId: string;
+  title: string;
+  projectName: string;
+  status: TaskStatus;
+  lastActivity: string;
+  lastActivityAt: string;
+  toolSummary: string;
+  savingsRate: number;
+  panelSlot: PanelSlot | null;
+  isOpen: boolean;
+};
+
 export type WorkbenchLayoutQuery = {
   layoutId?: string;
 };
@@ -166,6 +179,8 @@ export type WorkbenchLayoutQuery = {
 export type WorkbenchLayoutResult = {
   layoutId: string;
   updatedAt: string;
+  activePanelSlot: PanelSlot | null;
+  recentTasks: WorkbenchRecentTask[];
   panels: WorkbenchPanel[];
 };
 

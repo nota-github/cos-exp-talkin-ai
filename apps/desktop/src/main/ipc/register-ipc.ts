@@ -20,8 +20,10 @@ import {
   type ProjectDetailResult,
   type TaskStatus,
   type UsageDashboardResult,
+  type WorkbenchPanel,
   type WorkbenchLayoutResult,
 } from '../../shared/ipc/contracts';
+import { resolveWorkbenchPanelSlot } from '../../shared/ipc/workbench.ts';
 import type { ChatHistoryService } from '../chat/index.ts';
 import type { HistoryInspectionService } from '../history/index.ts';
 import {
@@ -44,12 +46,20 @@ type InternalTaskRecord = {
   mode: AppSettings['optimizationMode'];
   savingsRate: number;
   lastActivity: string;
+  lastActivityAt: string;
   toolSummary: string;
+};
+
+type InternalWorkbenchLayout = {
+  layoutId: string;
+  updatedAt: string;
+  activePanelSlot: PanelSlot | null;
+  panels: WorkbenchPanel[];
 };
 
 type DesktopIpcState = {
   chatFeed: DesktopQueryResponse<'getChatFeed'>;
-  workbenchLayout: WorkbenchLayoutResult;
+  workbenchLayout: InternalWorkbenchLayout;
   boardColumns: BoardColumnsResult;
   projects: Record<string, ProjectDetailResult>;
   usageDashboards: Record<'month' | 'all_time', UsageDashboardResult>;
@@ -138,12 +148,19 @@ const usageDashboardCategoryLabels = {
   project_linked: '프로젝트 연결',
 } as const;
 
+const activityNowLabel = '방금';
+
 function clone<TValue>(value: TValue): TValue {
   return structuredClone(value);
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function markTaskActivity(task: InternalTaskRecord, activityAt = nowIso()) {
+  task.lastActivity = activityNowLabel;
+  task.lastActivityAt = activityAt;
 }
 
 function computeDashboardCostUsd(inputTokens: number) {
@@ -264,6 +281,10 @@ function applyUsageDashboardDelta(
 }
 
 function createInitialState(): DesktopIpcState {
+  const primaryTaskActivityAt = '2026-06-08T01:13:00.000Z';
+  const researchTaskActivityAt = '2026-06-08T01:06:00.000Z';
+  const polishTaskActivityAt = '2026-06-08T01:18:00.000Z';
+
   const primaryTask: InternalTaskRecord = {
     taskId: 'task-001',
     conversationId: 'conv-001',
@@ -276,6 +297,7 @@ function createInitialState(): DesktopIpcState {
     mode: 'quality',
     savingsRate: 34,
     lastActivity: '5분 전',
+    lastActivityAt: primaryTaskActivityAt,
     toolSummary: 'Claude Sonnet · 품질 우선',
   };
 
@@ -291,6 +313,7 @@ function createInitialState(): DesktopIpcState {
     mode: 'long_context',
     savingsRate: 41,
     lastActivity: '12분 전',
+    lastActivityAt: researchTaskActivityAt,
     toolSummary: 'GPT-4.1 · 긴 컨텍스트',
   };
 
@@ -306,6 +329,7 @@ function createInitialState(): DesktopIpcState {
     mode: 'balanced',
     savingsRate: 27,
     lastActivity: '방금',
+    lastActivityAt: polishTaskActivityAt,
     toolSummary: 'Gemini 1.5 Pro · 기본',
   };
 
@@ -364,6 +388,7 @@ function createInitialState(): DesktopIpcState {
     workbenchLayout: {
       layoutId: 'layout-primary',
       updatedAt: nowIso(),
+      activePanelSlot: 'north-west',
       panels: panelSlots.map((slot, index) => ({
         slot,
         taskId: index === 0 ? primaryTask.taskId : index === 1 ? researchTask.taskId : null,
@@ -503,7 +528,9 @@ function createInitialState(): DesktopIpcState {
 
 function sortTasksForChatFeed(tasks: Record<string, InternalTaskRecord>) {
   return Object.values(tasks)
-    .sort((left, right) => right.taskId.localeCompare(left.taskId))
+    .sort((left, right) =>
+      right.lastActivityAt.localeCompare(left.lastActivityAt) || right.taskId.localeCompare(left.taskId),
+    )
     .map((task) => ({
       taskId: task.taskId,
       conversationId: task.conversationId,
@@ -513,8 +540,43 @@ function sortTasksForChatFeed(tasks: Record<string, InternalTaskRecord>) {
       model: task.model,
       mode: task.mode,
       savingsRate: task.savingsRate,
-      updatedAt: task.lastActivity,
+      updatedAt: task.lastActivityAt,
     }));
+}
+
+function buildWorkbenchLayoutFromState(state: DesktopIpcState): WorkbenchLayoutResult {
+  const openTaskBySlot = new Map(
+    state.workbenchLayout.panels
+      .filter((panel) => panel.taskId !== null)
+      .map((panel) => [panel.taskId as string, panel.slot]),
+  );
+
+  return {
+    layoutId: state.workbenchLayout.layoutId,
+    updatedAt: state.workbenchLayout.updatedAt,
+    activePanelSlot: state.workbenchLayout.activePanelSlot,
+    recentTasks: Object.values(state.tasks)
+      .sort((left, right) =>
+        right.lastActivityAt.localeCompare(left.lastActivityAt) || right.taskId.localeCompare(left.taskId),
+      )
+      .map((task) => {
+        const panelSlot = openTaskBySlot.get(task.taskId) ?? null;
+
+        return {
+          taskId: task.taskId,
+          title: task.title,
+          projectName: task.projectName,
+          status: task.status,
+          lastActivity: task.lastActivity,
+          lastActivityAt: task.lastActivityAt,
+          toolSummary: task.toolSummary,
+          savingsRate: task.savingsRate,
+          panelSlot,
+          isOpen: panelSlot !== null,
+        };
+      }),
+    panels: clone(state.workbenchLayout.panels),
+  };
 }
 
 function buildHistoryFeedFromState(state: DesktopIpcState): HistoryFeedResult {
@@ -553,6 +615,7 @@ function stageSubmittedPromptInState(
   const usageCategory = request.projectId ? 'project_linked' : 'general';
   const project = ensureProject(draftState, projectId);
   const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
+  const activityAt = nowIso();
   const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
   const tokenOptimized = Math.max(Math.floor(tokenBaseline * 0.61), 170);
   const savingsRate = Math.round((1 - tokenOptimized / tokenBaseline) * 100);
@@ -587,7 +650,8 @@ function stageSubmittedPromptInState(
     model: request.selectedModel,
     mode: request.optimizationMode,
     savingsRate,
-    lastActivity: '방금',
+    lastActivity: activityNowLabel,
+    lastActivityAt: activityAt,
     toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
   };
 
@@ -986,21 +1050,26 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
     openInWorkbench: async (request) =>
       commitCommandMutation('openInWorkbench', async (draftState) => {
         const task = ensureTask(draftState, request.taskId);
-        const slot =
-          request.panelSlot ??
-          draftState.workbenchLayout.panels.find((panel) => panel.taskId === null)?.slot ??
-          panelSlots[0];
+        const slot = resolveWorkbenchPanelSlot({
+          panels: draftState.workbenchLayout.panels,
+          taskId: task.taskId,
+          requestedPanelSlot: request.panelSlot,
+        });
         const panel = draftState.workbenchLayout.panels.find((currentPanel) => currentPanel.slot === slot);
+        const activityAt = nowIso();
 
         if (!panel) {
           throw new Error(`Unknown panel slot: ${slot}`);
         }
 
+        markTaskActivity(task, activityAt);
         panel.taskId = task.taskId;
         panel.title = task.title;
         panel.status = task.status;
-        panel.note = '작업대에서 이어지는 활성 작업';
-        draftState.workbenchLayout.updatedAt = nowIso();
+        panel.note = `최근 활동 ${task.lastActivity} · ${task.projectName}`;
+        draftState.workbenchLayout.activePanelSlot = slot;
+        draftState.workbenchLayout.updatedAt = activityAt;
+        draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
 
         return {
           result: {
@@ -1028,8 +1097,9 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         const project = ensureProject(draftState, task.projectId);
 
         task.status = request.status;
-        task.lastActivity = '방금';
+        markTaskActivity(task);
         draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
+        draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
 
         project.tasks = project.tasks.map((projectTask) =>
           projectTask.taskId === request.taskId
@@ -1108,7 +1178,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
             ...clone(state.chatFeed),
             activeConversationId: request.conversationId ?? state.chatFeed.activeConversationId,
           },
-    getWorkbenchLayout: async () => clone(state.workbenchLayout),
+    getWorkbenchLayout: async () => buildWorkbenchLayoutFromState(state),
     getBoardColumns: async () => clone(state.boardColumns),
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
     getUsageDashboard: async (request) =>
