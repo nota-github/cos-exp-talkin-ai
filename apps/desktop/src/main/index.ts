@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
 import { createPersistentChatHistoryService } from './chat/index.ts';
+import { createPersistentHistoryInspectionService } from './history/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createPersistentSecretService } from './keychain/index.ts';
 import { createCloudInferenceGateway } from './providers/index.ts';
@@ -29,6 +30,9 @@ function registerIpcHandlers() {
     dbPath,
   });
   const usageDashboardService = createPersistentUsageDashboardService({
+    dbPath,
+  });
+  const historyInspectionService = createPersistentHistoryInspectionService({
     dbPath,
   });
   const secretService = createPersistentSecretService({});
@@ -67,6 +71,7 @@ function registerIpcHandlers() {
       dbPath,
       optimizationStageOrchestrator,
     }),
+    historyInspectionService,
     settingsService,
     translationAdapter,
     usageDashboardService,

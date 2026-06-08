@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   createDesktopQueryDescriptor,
@@ -5,6 +6,17 @@ import {
   getRendererDesktopClient,
 } from '../lib/ipc/query-client';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
+import {
+  formatHistoryTimestamp,
+  getHistoryAdvancedReveals,
+  getHistoryArtifactSections,
+  getHistoryListMeta,
+  getHistoryModeLabel,
+  getHistoryUsageCards,
+  historyInspectionCopy,
+  previewHistoryEntries,
+  previewHistoryFeed,
+} from './history-surface';
 import {
   getUsageCumulativeBody,
   getUsageCategoryShareCopy,
@@ -67,6 +79,37 @@ function UsageEmptyState() {
   );
 }
 
+function HistoryLoadingState() {
+  return (
+    <section className="panel usage-history-state-card">
+      <span className="panel-kicker">히스토리 불러오는 중</span>
+      <strong>{historyInspectionCopy.sectionTitle}</strong>
+      <p>{historyInspectionCopy.sectionBody}</p>
+    </section>
+  );
+}
+
+function HistoryErrorState({ message }: { message: string | null }) {
+  return (
+    <section className="panel usage-history-state-card usage-history-state-card-error">
+      <span className="panel-kicker">히스토리 읽기 실패</span>
+      <strong>{historyInspectionCopy.sectionTitle}</strong>
+      <p>저장된 대화와 절감 기록은 그대로 있습니다. 잠시 후 다시 열어 보세요.</p>
+      {message ? <span className="badge badge-muted">{message}</span> : null}
+    </section>
+  );
+}
+
+function HistoryEmptyState() {
+  return (
+    <section className="panel usage-history-state-card">
+      <span className="panel-kicker">아직 실행 없음</span>
+      <strong>{historyInspectionCopy.emptyTitle}</strong>
+      <p>{historyInspectionCopy.emptyBody}</p>
+    </section>
+  );
+}
+
 export function UsageRoute() {
   const desktopClient = getRendererDesktopClient();
   const queryCache = getDesktopQueryCache();
@@ -76,6 +119,7 @@ export function UsageRoute() {
   const allTimeUsageDashboardDescriptor = createDesktopQueryDescriptor('getUsageDashboard', {
     range: 'all_time',
   });
+  const historyFeedDescriptor = createDesktopQueryDescriptor('getHistoryFeed', {});
   const monthUsageDashboardQuery = useDesktopQuery(
     queryCache,
     monthUsageDashboardDescriptor,
@@ -86,6 +130,19 @@ export function UsageRoute() {
     allTimeUsageDashboardDescriptor,
     { enabled: desktopClient.available },
   );
+  const historyFeedQuery = useDesktopQuery(
+    queryCache,
+    historyFeedDescriptor,
+    { enabled: desktopClient.available },
+  );
+  const historyFeed = desktopClient.available
+    ? historyFeedQuery.data
+    : previewHistoryFeed;
+  const [selectedHistoryRunId, setSelectedHistoryRunId] = useState<string | null>(
+    desktopClient.available ? null : previewHistoryFeed.items[0]?.runId ?? null,
+  );
+  const [showOptimizedPrompt, setShowOptimizedPrompt] = useState(false);
+  const [showProviderResponse, setShowProviderResponse] = useState(false);
   const monthDashboard = desktopClient.available
     ? monthUsageDashboardQuery.data
     : previewUsageDashboard;
@@ -125,6 +182,71 @@ export function UsageRoute() {
   const allTimePricingBasisLabel = allTimeDashboard
     ? getUsagePricingBasisLabel(allTimeDashboard)
     : usageDashboardCopy.loadingTitle;
+  const historyItems = historyFeed?.items ?? [];
+  const historyDetailRunId =
+    selectedHistoryRunId ??
+    historyItems[0]?.runId ??
+    (desktopClient.available ? null : previewHistoryFeed.items[0]?.runId ?? null);
+  const historyEntryDescriptor = createDesktopQueryDescriptor('getHistoryEntry', {
+    runId: historyDetailRunId ?? '__history_preview__',
+  });
+  const historyEntryQuery = useDesktopQuery(
+    queryCache,
+    historyEntryDescriptor,
+    {
+      enabled: desktopClient.available && historyDetailRunId !== null,
+    },
+  );
+  const selectedHistoryEntry =
+    desktopClient.available
+      ? historyEntryQuery.data
+      : (historyDetailRunId ? previewHistoryEntries[historyDetailRunId] ?? null : null);
+  const historyUsageCards = selectedHistoryEntry ? getHistoryUsageCards(selectedHistoryEntry) : [];
+  const historyArtifactSections = selectedHistoryEntry
+    ? getHistoryArtifactSections(selectedHistoryEntry, {
+        showOptimizedPrompt,
+        showProviderResponse,
+      })
+    : [];
+  const historyAdvancedReveals = selectedHistoryEntry
+    ? getHistoryAdvancedReveals(selectedHistoryEntry, {
+        showOptimizedPrompt,
+        showProviderResponse,
+      })
+    : [];
+  const showHistoryLoadingState =
+    desktopClient.available &&
+    historyFeedQuery.status === 'loading' &&
+    !historyFeedQuery.data;
+  const showHistoryErrorState =
+    desktopClient.available &&
+    historyFeedQuery.status === 'error' &&
+    !historyFeedQuery.data;
+  const showHistoryEmptyState =
+    !showHistoryLoadingState &&
+    !showHistoryErrorState &&
+    historyItems.length === 0;
+
+  useEffect(() => {
+    const firstRunId = historyItems[0]?.runId ?? null;
+
+    if (!selectedHistoryRunId && firstRunId) {
+      setSelectedHistoryRunId(firstRunId);
+      return;
+    }
+
+    if (
+      selectedHistoryRunId &&
+      !historyItems.some((item) => item.runId === selectedHistoryRunId)
+    ) {
+      setSelectedHistoryRunId(firstRunId);
+    }
+  }, [historyItems, selectedHistoryRunId]);
+
+  useEffect(() => {
+    setShowOptimizedPrompt(false);
+    setShowProviderResponse(false);
+  }, [historyDetailRunId]);
 
   return (
     <section className="screen screen-usage">
@@ -402,6 +524,212 @@ export function UsageRoute() {
               </div>
             </section>
           )}
+        </>
+      ) : null}
+
+      {!showLoadingState && !showErrorState && !showEmptyState ? (
+        <>
+          {showHistoryLoadingState ? <HistoryLoadingState /> : null}
+          {showHistoryErrorState ? (
+            <HistoryErrorState message={historyFeedQuery.error?.message ?? null} />
+          ) : null}
+          {showHistoryEmptyState ? <HistoryEmptyState /> : null}
+
+          {!showHistoryLoadingState && !showHistoryErrorState && !showHistoryEmptyState ? (
+            <section className="panel usage-history-panel">
+              <div className="panel-header panel-header-stack">
+                <div>
+                  <span className="panel-kicker">{historyInspectionCopy.sectionKicker}</span>
+                  <h3>{historyInspectionCopy.sectionTitle}</h3>
+                  <p>{historyInspectionCopy.sectionBody}</p>
+                </div>
+                <div className="chip-row">
+                  <span className="badge badge-primary">{historyInspectionCopy.listTitle}</span>
+                  {!desktopClient.available ? (
+                    <span className="badge badge-muted">예시 히스토리</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="usage-history-layout">
+                <aside className="usage-history-list">
+                  <div className="usage-history-list-header">
+                    <div>
+                      <span className="panel-kicker">{historyInspectionCopy.listTitle}</span>
+                      <p>{historyInspectionCopy.listBody}</p>
+                    </div>
+                    <span className="badge badge-muted">{historyItems.length}개 실행</span>
+                  </div>
+
+                  <div className="usage-history-list-rows">
+                    {historyItems.map((item) => (
+                      <button
+                        key={item.runId}
+                        type="button"
+                        className={
+                          item.runId === historyDetailRunId
+                            ? 'usage-history-row usage-history-row-active'
+                            : 'usage-history-row'
+                        }
+                        onClick={() => {
+                          setSelectedHistoryRunId(item.runId);
+                        }}
+                      >
+                        <span className="starter-eyebrow">{item.title}</span>
+                        <strong>{item.finalResponsePreview}</strong>
+                        <div className="usage-history-row-meta">
+                          <span>{getHistoryListMeta(item)}</span>
+                          <span>{formatHistoryTimestamp(item.completedAt)}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </aside>
+
+                <section className="usage-history-detail">
+                  {desktopClient.available &&
+                  historyDetailRunId !== null &&
+                  historyEntryQuery.status === 'loading' &&
+                  !historyEntryQuery.data ? (
+                    <article className="usage-history-detail-state">
+                      <span className="panel-kicker">상세 불러오는 중</span>
+                      <strong>{historyInspectionCopy.detailTitle}</strong>
+                      <p>{historyInspectionCopy.detailBody}</p>
+                    </article>
+                  ) : desktopClient.available &&
+                    historyDetailRunId !== null &&
+                    historyEntryQuery.status === 'error' &&
+                    !historyEntryQuery.data ? (
+                    <article className="usage-history-detail-state usage-history-detail-state-error">
+                      <span className="panel-kicker">상세 읽기 실패</span>
+                      <strong>{historyInspectionCopy.detailTitle}</strong>
+                      <p>{historyEntryQuery.error?.message ?? '저장된 실행 상세를 읽지 못했습니다.'}</p>
+                    </article>
+                  ) : selectedHistoryEntry ? (
+                    <>
+                      <header className="usage-history-detail-header">
+                        <div>
+                          <span className="panel-kicker">{historyInspectionCopy.detailTitle}</span>
+                          <h4>{selectedHistoryEntry.title}</h4>
+                          <p>{historyInspectionCopy.detailBody}</p>
+                        </div>
+                        <div className="usage-history-detail-badges">
+                          <span className="badge badge-primary">
+                            {selectedHistoryEntry.model} · {getHistoryModeLabel(selectedHistoryEntry.mode)}
+                          </span>
+                          <span className="badge badge-success">
+                            {selectedHistoryEntry.usage.savingsRate}% 절감
+                          </span>
+                          <span className="badge badge-muted">
+                            {formatHistoryTimestamp(selectedHistoryEntry.completedAt)}
+                          </span>
+                        </div>
+                      </header>
+
+                      <div className="usage-history-metrics">
+                        {historyUsageCards.map((card) => (
+                          <article
+                            key={card.id}
+                            className={
+                              card.tone === 'savings'
+                                ? 'usage-history-metric-card usage-history-metric-card-savings'
+                                : 'usage-history-metric-card'
+                            }
+                          >
+                            <span className="metric-label">{card.label}</span>
+                            <strong>{card.value}</strong>
+                            <p>{card.detail}</p>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div className="usage-history-artifact-list">
+                        {historyArtifactSections
+                          .filter((section) => section.visibility === 'default')
+                          .map((section) => (
+                            <article
+                              key={section.id}
+                              className={`usage-history-artifact-card usage-history-artifact-card-${section.tone}`}
+                            >
+                              <div className="usage-history-artifact-header">
+                                <div>
+                                  <span className="panel-kicker">{section.label}</span>
+                                  {section.tokenLabel ? <strong>{section.tokenLabel}</strong> : null}
+                                </div>
+                                <span className="badge badge-muted">
+                                  {section.tone === 'result' ? '바로 읽기' : '저장된 원문'}
+                                </span>
+                              </div>
+                              <pre className="usage-history-artifact-body">{section.body}</pre>
+                            </article>
+                          ))}
+                      </div>
+
+                      {historyAdvancedReveals.length > 0 ? (
+                        <div className="usage-history-reveal-list">
+                          {historyAdvancedReveals.map((reveal) => (
+                            <div
+                              key={reveal.id}
+                              className="usage-history-reveal-item"
+                            >
+                              <button
+                                type="button"
+                                className="soft-button usage-history-reveal-button"
+                                aria-expanded={reveal.expanded}
+                                aria-controls={`${selectedHistoryEntry.runId}-${reveal.id}`}
+                                onClick={() => {
+                                  if (reveal.id === 'optimized_prompt_en') {
+                                    setShowOptimizedPrompt((current) => !current);
+                                    return;
+                                  }
+
+                                  setShowProviderResponse((current) => !current);
+                                }}
+                              >
+                                {reveal.label}
+                              </button>
+                              <p>{reveal.helper}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div className="usage-history-artifact-list">
+                        {historyArtifactSections
+                          .filter((section) => section.visibility === 'advanced')
+                          .map((section) => (
+                            <article
+                              key={section.id}
+                              id={`${selectedHistoryEntry.runId}-${section.id}`}
+                              className="usage-history-artifact-card usage-history-artifact-card-advanced"
+                            >
+                              <div className="usage-history-artifact-header">
+                                <div>
+                                  <span className="panel-kicker">{section.label}</span>
+                                  {section.tokenLabel ? <strong>{section.tokenLabel}</strong> : null}
+                                </div>
+                                <span className="badge badge-muted">고급 보기</span>
+                              </div>
+                              <pre className="usage-history-artifact-body">{section.body}</pre>
+                            </article>
+                          ))}
+                      </div>
+
+                      {selectedHistoryEntry.usage.isEstimated ? (
+                        <p className="usage-history-footnote">{historyInspectionCopy.estimatedFootnote}</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <article className="usage-history-detail-state">
+                      <span className="panel-kicker">선택 대기</span>
+                      <strong>{historyInspectionCopy.detailTitle}</strong>
+                      <p>{historyInspectionCopy.emptyBody}</p>
+                    </article>
+                  )}
+                </section>
+              </div>
+            </section>
+          ) : null}
         </>
       ) : null}
     </section>
