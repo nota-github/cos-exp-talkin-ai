@@ -14,6 +14,7 @@ import {
   createPersistentOptimizationStageOrchestrator,
   createPersistentResponseCompletionOrchestrator,
 } from './workflows/index.ts';
+import { createPersistentUsageDashboardService } from './usage/index.ts';
 
 let mainWindow: BrowserWindow | null = null;
 let ipcHandlersRegistered = false;
@@ -25,6 +26,9 @@ function registerIpcHandlers() {
 
   const dbPath = join(app.getPath('userData'), 'talkin-ai.db');
   const settingsService = createPersistentAppSettingsService({
+    dbPath,
+  });
+  const usageDashboardService = createPersistentUsageDashboardService({
     dbPath,
   });
   const secretService = createPersistentSecretService({});
@@ -65,6 +69,7 @@ function registerIpcHandlers() {
     }),
     settingsService,
     translationAdapter,
+    usageDashboardService,
   });
 
   ipcHandlersRegistered = true;

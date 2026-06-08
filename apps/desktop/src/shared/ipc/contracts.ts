@@ -48,6 +48,7 @@ export const ipcChannels: {
 };
 
 export type CloudModelId = 'gpt-4.1' | 'claude-sonnet-4' | 'gemini-1.5-pro';
+export type ProviderId = 'openai' | 'anthropic' | 'google';
 export type OptimizationMode = 'balanced' | 'savings' | 'quality' | 'long_context';
 export type TaskStatus = 'planning' | 'in_progress' | 'ai_review' | 'human_review' | 'completed';
 export type PanelSlot = 'north-west' | 'north-east' | 'south-west' | 'south-east';
@@ -209,16 +210,51 @@ export type UsageDashboardQuery = {
   range: 'month' | 'all_time';
 };
 
+export type UsageDashboardCategoryId = 'general' | 'starter_template' | 'project_linked';
+
+export type UsageDashboardPricingBasis = {
+  provider: ProviderId;
+  model: CloudModelId;
+  pricingVersion: string;
+  requestCount: number;
+};
+
 export type UsageDashboardResult = {
   range: 'month' | 'all_time';
+  pricingBasis: {
+    status: 'empty' | 'single' | 'mixed';
+    activeBasis: UsageDashboardPricingBasis | null;
+    bases: UsageDashboardPricingBasis[];
+  };
+  categoryShareBasis: 'baseline_tokens' | 'request_count';
   totals: {
+    requestCount: number;
     baselineTokens: number;
     optimizedTokens: number;
+    tokenReduction: number;
     savingsRate: number;
     estimatedSavingsUsd: number;
   };
+  comparison: {
+    withoutOptimization: {
+      requestCount: number;
+      inputTokens: number;
+      estimatedCostUsd: number;
+    };
+    withOptimization: {
+      requestCount: number;
+      inputTokens: number;
+      estimatedCostUsd: number;
+    };
+  };
   categories: Array<{
-    name: string;
+    id: UsageDashboardCategoryId;
+    label: string;
+    requestCount: number;
+    baselineTokens: number;
+    optimizedTokens: number;
+    tokenReduction: number;
+    savingsRate: number;
     share: number;
   }>;
 };

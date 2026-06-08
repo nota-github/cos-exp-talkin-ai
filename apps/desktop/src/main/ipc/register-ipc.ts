@@ -28,6 +28,7 @@ import {
   type AppSettingsService,
 } from '../settings/index.ts';
 import type { TranslationMcpAdapter } from '../translation/index.ts';
+import type { UsageDashboardService } from '../usage/index.ts';
 
 type InternalTaskRecord = {
   taskId: string;
@@ -92,6 +93,7 @@ export type RegisterDesktopIpcOptions = {
   state?: DesktopIpcState;
   settingsService?: AppSettingsService;
   translationAdapter?: TranslationMcpAdapter;
+  usageDashboardService?: UsageDashboardService;
 };
 
 export type DesktopIpcService = {
@@ -127,12 +129,135 @@ const panelSlots: PanelSlot[] = [
   'south-east',
 ];
 
+const usageDashboardCategoryLabels = {
+  general: '일반 요청',
+  starter_template: '추천 시작 작업',
+  project_linked: '프로젝트 연결',
+} as const;
+
 function clone<TValue>(value: TValue): TValue {
   return structuredClone(value);
 }
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function computeDashboardCostUsd(inputTokens: number) {
+  return Number(((inputTokens / 1_000) * 0.0024).toFixed(6));
+}
+
+function createUsageDashboardCategorySeed(
+  id: keyof typeof usageDashboardCategoryLabels,
+  requestCount: number,
+  baselineTokens: number,
+  optimizedTokens: number,
+) {
+  return {
+    id,
+    label: usageDashboardCategoryLabels[id],
+    requestCount,
+    baselineTokens,
+    optimizedTokens,
+    tokenReduction: Math.max(0, baselineTokens - optimizedTokens),
+    savingsRate:
+      baselineTokens <= 0
+        ? 0
+        : Math.max(0, Math.round((1 - optimizedTokens / baselineTokens) * 100)),
+    share: 0,
+  };
+}
+
+function buildUsageDashboardState(
+  range: 'month' | 'all_time',
+  categorySeeds: Array<ReturnType<typeof createUsageDashboardCategorySeed>>,
+): UsageDashboardResult {
+  const baselineTokens = categorySeeds.reduce((sum, category) => sum + category.baselineTokens, 0);
+  const optimizedTokens = categorySeeds.reduce((sum, category) => sum + category.optimizedTokens, 0);
+  const requestCount = categorySeeds.reduce((sum, category) => sum + category.requestCount, 0);
+  const tokenReduction = Math.max(0, baselineTokens - optimizedTokens);
+  const withoutCostUsd = computeDashboardCostUsd(baselineTokens);
+  const withCostUsd = computeDashboardCostUsd(optimizedTokens);
+
+  return {
+    range,
+    pricingBasis: {
+      status: 'single',
+      activeBasis: {
+        provider: 'openai',
+        model: 'gpt-4.1',
+        pricingVersion: 'openai-gpt-4.1-2026-06',
+        requestCount,
+      },
+      bases: [
+        {
+          provider: 'openai',
+          model: 'gpt-4.1',
+          pricingVersion: 'openai-gpt-4.1-2026-06',
+          requestCount,
+        },
+      ],
+    },
+    categoryShareBasis: 'baseline_tokens',
+    totals: {
+      requestCount,
+      baselineTokens,
+      optimizedTokens,
+      tokenReduction,
+      savingsRate:
+        baselineTokens <= 0
+          ? 0
+          : Math.max(0, Math.round((1 - optimizedTokens / baselineTokens) * 100)),
+      estimatedSavingsUsd: Number((withoutCostUsd - withCostUsd).toFixed(6)),
+    },
+    comparison: {
+      withoutOptimization: {
+        requestCount,
+        inputTokens: baselineTokens,
+        estimatedCostUsd: withoutCostUsd,
+      },
+      withOptimization: {
+        requestCount,
+        inputTokens: optimizedTokens,
+        estimatedCostUsd: withCostUsd,
+      },
+    },
+    categories: categorySeeds.map((category) => ({
+      ...category,
+      share:
+        baselineTokens > 0
+          ? Math.round((category.baselineTokens / baselineTokens) * 100)
+          : 0,
+    })),
+  };
+}
+
+function applyUsageDashboardDelta(
+  dashboard: UsageDashboardResult,
+  categoryId: keyof typeof usageDashboardCategoryLabels,
+  baselineDelta: number,
+  optimizedDelta: number,
+) {
+  const nextSeeds = dashboard.categories.map((category) =>
+    category.id === categoryId
+      ? createUsageDashboardCategorySeed(
+          category.id,
+          category.requestCount + 1,
+          category.baselineTokens + baselineDelta,
+          category.optimizedTokens + optimizedDelta,
+        )
+      : createUsageDashboardCategorySeed(
+          category.id,
+          category.requestCount,
+          category.baselineTokens,
+          category.optimizedTokens,
+        ),
+  );
+  const nextDashboard = buildUsageDashboardState(dashboard.range, nextSeeds);
+
+  dashboard.totals = nextDashboard.totals;
+  dashboard.comparison = nextDashboard.comparison;
+  dashboard.categories = nextDashboard.categories;
 }
 
 function createInitialState(): DesktopIpcState {
@@ -307,34 +432,16 @@ function createInitialState(): DesktopIpcState {
       },
     },
     usageDashboards: {
-      month: {
-        range: 'month',
-        totals: {
-          baselineTokens: 18240,
-          optimizedTokens: 10810,
-          savingsRate: 41,
-          estimatedSavingsUsd: 12.6,
-        },
-        categories: [
-          { name: '문서 요약', share: 44 },
-          { name: '사업계획서', share: 33 },
-          { name: '카피 다듬기', share: 23 },
-        ],
-      },
-      all_time: {
-        range: 'all_time',
-        totals: {
-          baselineTokens: 54310,
-          optimizedTokens: 32140,
-          savingsRate: 41,
-          estimatedSavingsUsd: 37.4,
-        },
-        categories: [
-          { name: '문서 요약', share: 39 },
-          { name: '사업계획서', share: 35 },
-          { name: '카피 다듬기', share: 26 },
-        ],
-      },
+      month: buildUsageDashboardState('month', [
+        createUsageDashboardCategorySeed('starter_template', 4, 8110, 4310),
+        createUsageDashboardCategorySeed('general', 3, 6020, 3890),
+        createUsageDashboardCategorySeed('project_linked', 2, 4110, 2610),
+      ]),
+      all_time: buildUsageDashboardState('all_time', [
+        createUsageDashboardCategorySeed('starter_template', 11, 21490, 12410),
+        createUsageDashboardCategorySeed('general', 8, 17820, 10980),
+        createUsageDashboardCategorySeed('project_linked', 6, 15000, 8750),
+      ]),
     },
     historyEntries: {
       'run-001': {
@@ -394,6 +501,7 @@ function stageSubmittedPromptInState(
   },
 ) {
   const projectId = request.projectId ?? 'project-001';
+  const usageCategory = request.projectId ? 'project_linked' : 'general';
   const project = ensureProject(draftState, projectId);
   const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
   const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
@@ -463,10 +571,18 @@ function stageSubmittedPromptInState(
     provider: request.selectedModel,
   };
 
-  draftState.usageDashboards.month.totals.baselineTokens += tokenBaseline;
-  draftState.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
-  draftState.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
-  draftState.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
+  applyUsageDashboardDelta(
+    draftState.usageDashboards.month,
+    usageCategory,
+    tokenBaseline,
+    tokenOptimized,
+  );
+  applyUsageDashboardDelta(
+    draftState.usageDashboards.all_time,
+    usageCategory,
+    tokenBaseline,
+    tokenOptimized,
+  );
 }
 
 function stageRetriedRunInState(
@@ -587,6 +703,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   const chatHistoryService = options.chatHistoryService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
   const translationAdapter = options.translationAdapter ?? null;
+  const usageDashboardService = options.usageDashboardService ?? null;
 
   async function resolvePreparedMutationResult<TResult>(
     outcome: PreparedMutationResult<TResult>,
@@ -905,7 +1022,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
     getWorkbenchLayout: async () => clone(state.workbenchLayout),
     getBoardColumns: async () => clone(state.boardColumns),
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
-    getUsageDashboard: async (request) => clone(state.usageDashboards[request.range]),
+    getUsageDashboard: async (request) =>
+      usageDashboardService
+        ? usageDashboardService.getUsageDashboard(request)
+        : clone(state.usageDashboards[request.range]),
     getHistoryEntry: async (request) => clone(ensureHistoryEntry(state, request.runId)),
     getSettings: async () => settingsService.getSettings(),
   };
