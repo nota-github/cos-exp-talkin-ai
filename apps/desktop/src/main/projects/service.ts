@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type {
+  AttachProjectFileCommand,
+  AttachProjectFileResult,
   CreateProjectCommand,
   CreateProjectResult,
   ProjectDetailQuery,
@@ -8,9 +12,12 @@ import type {
   ProjectListResult,
   SetTaskProjectCommand,
   SetTaskProjectResult,
+  UnlinkProjectFileCommand,
+  UnlinkProjectFileResult,
   UpdateProjectCommand,
   UpdateProjectResult,
 } from '../../shared/ipc/contracts';
+import { createProjectFileStorage, type ProjectFileStorage } from '../files/index.ts';
 import {
   createChatRunPersistence,
   type ChatRunPersistence,
@@ -32,6 +39,8 @@ export interface ProjectService {
   createProject(request: CreateProjectCommand): Promise<CreateProjectResult>;
   updateProject(request: UpdateProjectCommand): Promise<UpdateProjectResult>;
   setTaskProject(request: SetTaskProjectCommand): Promise<SetTaskProjectResult>;
+  attachProjectFile(request: AttachProjectFileCommand): Promise<AttachProjectFileResult>;
+  unlinkProjectFile(request: UnlinkProjectFileCommand): Promise<UnlinkProjectFileResult>;
 }
 
 export type PersistentProjectServiceOptions = {
@@ -40,6 +49,7 @@ export type PersistentProjectServiceOptions = {
   openDatabase?: (filename: string) => Promise<SqliteDatabaseHandle>;
   migrateSchema?: (connection: SqliteConnection) => Promise<number>;
   createId?: (prefix: string) => string;
+  fileStorage?: ProjectFileStorage;
 };
 
 function formatRelativeActivity(nowIso: string, activityAt: string) {
@@ -170,6 +180,17 @@ function defaultCreateId(prefix: string) {
   return `${prefix}-${randomUUID()}`;
 }
 
+function resolveProjectFileStorage(
+  options: PersistentProjectServiceOptions,
+): ProjectFileStorage {
+  return (
+    options.fileStorage ??
+    createProjectFileStorage({
+      rootDir: join(dirname(options.dbPath), 'project-files'),
+    })
+  );
+}
+
 async function touchProject(
   scope: Pick<ChatRunPersistenceScope, 'projects'>,
   projectId: string,
@@ -195,6 +216,7 @@ export function createPersistentProjectService(
 ): ProjectService {
   const now = options.now ?? (() => new Date().toISOString());
   const createId = options.createId ?? defaultCreateId;
+  const fileStorage = resolveProjectFileStorage(options);
 
   return {
     async getProjectList(_request) {
@@ -326,6 +348,83 @@ export function createPersistentProjectService(
             taskId: task.id,
             projectId: request.projectId,
             previousProjectId,
+          };
+        }),
+      );
+    },
+
+    async attachProjectFile(request) {
+      const updatedAt = now();
+      const displayName = request.file.displayName.trim();
+      const mimeType = request.file.mimeType.trim() || 'application/octet-stream';
+
+      if (!displayName) {
+        throw new Error('첨부할 파일 이름을 확인할 수 없습니다.');
+      }
+
+      return withProjectPersistence(options, async (persistence) =>
+        persistence.transaction(async (tx) => {
+          const project = await tx.projects.getById(request.projectId);
+
+          if (!project) {
+            throw new Error('파일을 연결할 프로젝트를 찾을 수 없습니다.');
+          }
+
+          const fileId = createId('file');
+          const storedFile = await fileStorage.storeFile({
+            projectId: request.projectId,
+            fileId,
+            displayName,
+            bytes: new Uint8Array(request.file.bytes),
+          });
+
+          try {
+            await tx.fileAssets.create({
+              id: fileId,
+              projectId: request.projectId,
+              displayName,
+              storagePath: storedFile.storagePath,
+              mimeType,
+              sizeBytes: storedFile.sizeBytes,
+            });
+            await touchProject(tx, request.projectId, updatedAt);
+
+            return {
+              projectId: request.projectId,
+              fileId,
+              displayName,
+              mimeType,
+              sizeBytes: storedFile.sizeBytes,
+              storagePath: storedFile.storagePath,
+            };
+          } catch (error) {
+            await rm(storedFile.storagePath, { force: true });
+            throw error;
+          }
+        }),
+      );
+    },
+
+    async unlinkProjectFile(request) {
+      return withProjectPersistence(options, async (persistence) =>
+        persistence.transaction(async (tx) => {
+          const existingFile = await tx.fileAssets.getById(request.fileId);
+
+          if (!existingFile || existingFile.projectId !== request.projectId) {
+            throw new Error('연결 해제할 프로젝트 파일을 찾을 수 없습니다.');
+          }
+
+          const updatedAt = now();
+
+          await tx.fileAssets.delete(request.fileId);
+          await touchProject(tx, request.projectId, updatedAt);
+
+          return {
+            projectId: request.projectId,
+            fileId: request.fileId,
+            storagePath: existingFile.storagePath,
+            originalFileDeleted: false,
+            managedCopyRetained: true,
           };
         }),
       );

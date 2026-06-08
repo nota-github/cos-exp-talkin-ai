@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -46,6 +46,7 @@ function createTempDatabase() {
   writeFileSync(dbPath, '');
 
   return {
+    directory,
     dbPath,
     cleanup() {
       rmSync(directory, { recursive: true, force: true });
@@ -821,4 +822,124 @@ test('story-5.7:VAL-3, story-5.7:AC-4, story-5.7:AC-5, and story-5.7:AC-6 projec
   assert.match(projectsStylesSource, /\.project-detail-task-card\s*\{/);
   assert.match(projectsStylesSource, /\.project-file-empty\s*\{/);
   assert.match(projectsStylesSource, /\.project-context-card\s*\{/);
+});
+
+test('story-5.8:VAL-1, story-5.8:VAL-2, story-5.8:VAL-3, story-5.8:AC-1, story-5.8:AC-2, story-5.8:AC-3, and story-5.8:AC-4 attach, persist, list, and unlink project files without deleting the original local file', async () => {
+  const temp = createTempDatabase();
+
+  try {
+    await seedProject(temp.dbPath, {
+      id: 'project-001',
+      name: '사업계획서',
+      description: '파일 연결 테스트용 프로젝트',
+      goal: '참고 문서를 프로젝트 허브에 연결하고 다시 확인',
+      createdAt: '2026-06-08T05:00:00.000Z',
+      updatedAt: '2026-06-08T05:00:00.000Z',
+    });
+
+    const sourceFilePath = join(temp.directory, 'local-source.pdf');
+    const sourceBytes = Buffer.from('%PDF-1.4\nproject file sample\n');
+    writeFileSync(sourceFilePath, sourceBytes);
+
+    const idFactory = createDeterministicIdFactory();
+    const firstService = createDesktopIpcService({
+      projectService: createPersistentProjectService({
+        dbPath: temp.dbPath,
+        createId: idFactory,
+        now: createSequenceNow('2026-06-08T05:01:00.000Z', '2026-06-08T05:02:00.000Z'),
+      }),
+    });
+
+    const attachResult = await firstService.commands.attachProjectFile({
+      projectId: 'project-001',
+      file: {
+        displayName: 'partner-brief.pdf',
+        mimeType: 'application/pdf',
+        bytes: new Uint8Array(sourceBytes),
+      },
+    });
+    const attachedDetail = await firstService.queries.getProjectDetail({
+      projectId: 'project-001',
+    });
+
+    assert.equal(attachResult.projectId, 'project-001');
+    assert.equal(attachResult.fileId, 'file-001');
+    assert.equal(attachResult.displayName, 'partner-brief.pdf');
+    assert.equal(attachResult.mimeType, 'application/pdf');
+    assert.equal(attachResult.sizeBytes, sourceBytes.byteLength);
+    assert.equal(existsSync(attachResult.storagePath), true);
+    assert.equal(readFileSync(attachResult.storagePath).equals(sourceBytes), true);
+    assert.deepEqual(attachedDetail.files, [
+      {
+        fileId: 'file-001',
+        displayName: 'partner-brief.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: sourceBytes.byteLength,
+      },
+    ]);
+
+    const restartedService = createDesktopIpcService({
+      projectService: createPersistentProjectService({
+        dbPath: temp.dbPath,
+        createId: idFactory,
+        now: createSequenceNow('2026-06-08T05:03:00.000Z', '2026-06-08T05:04:00.000Z'),
+      }),
+    });
+    const restartedDetail = await restartedService.queries.getProjectDetail({
+      projectId: 'project-001',
+    });
+
+    const handle = await openSqliteDatabase(temp.dbPath);
+    const persistence = createChatRunPersistence(handle.connection);
+
+    try {
+      const storedFile = await persistence.fileAssets.getById('file-001');
+
+      assert.deepEqual(restartedDetail.files, attachedDetail.files);
+      assert.equal(storedFile?.storagePath, attachResult.storagePath);
+      assert.equal(storedFile?.sizeBytes, sourceBytes.byteLength);
+    } finally {
+      await persistence.close();
+    }
+
+    const unlinkResult = await restartedService.commands.unlinkProjectFile({
+      projectId: 'project-001',
+      fileId: 'file-001',
+    });
+    const unlinkedDetail = await restartedService.queries.getProjectDetail({
+      projectId: 'project-001',
+    });
+
+    const reopenedHandle = await openSqliteDatabase(temp.dbPath);
+    const reopenedPersistence = createChatRunPersistence(reopenedHandle.connection);
+
+    try {
+      assert.deepEqual(unlinkResult, {
+        projectId: 'project-001',
+        fileId: 'file-001',
+        storagePath: attachResult.storagePath,
+        originalFileDeleted: false,
+        managedCopyRetained: true,
+      });
+      assert.deepEqual(unlinkedDetail.files, []);
+      assert.equal(await reopenedPersistence.fileAssets.getById('file-001'), null);
+      assert.equal(readFileSync(sourceFilePath).equals(sourceBytes), true);
+      assert.equal(existsSync(attachResult.storagePath), true);
+      assert.equal(readFileSync(attachResult.storagePath).equals(sourceBytes), true);
+    } finally {
+      await reopenedPersistence.close();
+    }
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-5.8:AC-5 and story-5.8:AC-6 project detail file section keeps compact attach actions for both empty and populated states', () => {
+  assert.match(projectsRouteSource, /문서 관리 화면처럼 확장하지 않고/);
+  assert.match(projectsRouteSource, /첫 파일 연결/);
+  assert.match(projectsRouteSource, /파일 추가/);
+  assert.match(projectsRouteSource, /원본 로컬 파일은 삭제하지 않고/);
+  assert.match(projectsStylesSource, /\.project-file-toolbar\s*\{/);
+  assert.match(projectsStylesSource, /\.project-file-action-row\s*\{/);
+  assert.match(projectsStylesSource, /\.project-file-policy\s*\{/);
 });
