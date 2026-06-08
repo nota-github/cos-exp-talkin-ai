@@ -16,6 +16,7 @@ import {
   type AppSettingsService,
 } from '../settings/index.ts';
 import type { TranslationMcpAdapter, TranslationMcpRuntimeError } from '../translation/index.ts';
+import { buildTaskProjectionInvalidationTargets } from '../ipc/invalidation.ts';
 import { buildPreservationInput, buildUsageRecordInput, estimateTokenCount } from './run-helpers.ts';
 
 type OrchestratorCreateId = (prefix: string) => string;
@@ -58,6 +59,7 @@ export type CreatePersistentResponseCompletionOrchestratorOptions = {
   settingsService?: AppSettingsService;
   now?: () => string;
   createId?: OrchestratorCreateId;
+  emitInvalidation?: (targets: ReturnType<typeof buildTaskProjectionInvalidationTargets>) => void;
 };
 
 type CompletedRunContext = {
@@ -143,7 +145,7 @@ export function createPersistentResponseCompletionOrchestrator(
   ) {
     const failedAt = now();
 
-    await persistence.transaction(async (tx) => {
+    const invalidationContext = await persistence.transaction(async (tx) => {
       if (input.providerResponseEnglish?.trim()) {
         await tx.promptArtifacts.create({
           id: createId('artifact'),
@@ -184,7 +186,20 @@ export function createPersistentResponseCompletionOrchestrator(
           lastActivityAt: failedAt,
         });
       }
+
+      return {
+        taskId: taskId ?? null,
+        conversationId: updatedRun?.conversationId ?? null,
+      };
     });
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: invalidationContext.taskId,
+        conversationId: invalidationContext.conversationId,
+        runId: input.runId,
+      }),
+    );
   }
 
   async function claimOptimizedRun(
@@ -192,7 +207,7 @@ export function createPersistentResponseCompletionOrchestrator(
     input: CompleteOptimizedRunCommand,
     responseLanguage: AppSettings['responseLanguage'],
   ): Promise<CompletedRunContext | CompletionStageResult> {
-    return persistence.transaction(async (tx) => {
+    const claimedRun = await persistence.transaction(async (tx) => {
       const run = await tx.runRecords.getById(input.runId);
 
       if (!run) {
@@ -282,6 +297,32 @@ export function createPersistentResponseCompletionOrchestrator(
         responseLanguage,
       } satisfies CompletedRunContext;
     });
+
+    if ('status' in claimedRun) {
+      if (claimedRun.status === 'failed') {
+        const run = await persistence.runRecords.getById(input.runId);
+
+        options.emitInvalidation?.(
+          buildTaskProjectionInvalidationTargets({
+            taskId: run?.taskId ?? null,
+            conversationId: run?.conversationId ?? null,
+            runId: input.runId,
+          }),
+        );
+      }
+
+      return claimedRun;
+    }
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: claimedRun.run.taskId,
+        conversationId: claimedRun.run.conversationId,
+        runId: input.runId,
+      }),
+    );
+
+    return claimedRun;
   }
 
   async function markRestoring(
@@ -321,6 +362,16 @@ export function createPersistentResponseCompletionOrchestrator(
         lastActivityAt: startedAt,
       });
     });
+
+    const run = await persistence.runRecords.getById(input.runId);
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: input.taskId,
+        conversationId: run?.conversationId ?? null,
+        runId: input.runId,
+      }),
+    );
   }
 
   async function completeRun(
@@ -414,6 +465,15 @@ export function createPersistentResponseCompletionOrchestrator(
       });
       await tx.usageRecords.create(usageRecord);
     });
+
+    options.emitInvalidation?.(
+      buildTaskProjectionInvalidationTargets({
+        taskId: input.context.run.taskId,
+        conversationId: input.context.run.conversationId,
+        runId: input.context.run.id,
+        includeUsageDashboard: true,
+      }),
+    );
   }
 
   return {

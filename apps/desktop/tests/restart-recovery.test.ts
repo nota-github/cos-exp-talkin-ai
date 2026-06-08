@@ -3,10 +3,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createPersistentBoardService } from '../src/main/board/index.ts';
 import { createPersistentChatHistoryService } from '../src/main/chat/index.ts';
+import { createDesktopInvalidationEmitter } from '../src/main/ipc/invalidation.ts';
+import { registerDesktopIpcHandlers } from '../src/main/ipc/register-ipc.ts';
 import { createChatRunPersistence, migrateDesktopSchema } from '../src/main/persistence/index.ts';
 import { openSqliteDatabase } from '../src/main/persistence/database.ts';
 import type { CloudInferenceGateway } from '../src/main/providers/index.ts';
+import { createPersistentProjectService } from '../src/main/projects/index.ts';
 import {
   createInMemoryAppSettingsService,
   defaultAppSettings,
@@ -15,11 +19,19 @@ import {
   createFakeTranslationMcpRuntime,
   createTranslationMcpAdapter,
 } from '../src/main/translation/index.ts';
+import { createPersistentWorkbenchService } from '../src/main/workbench/index.ts';
 import {
   createPersistentOptimizationStageOrchestrator,
   createPersistentRestartRecoveryService,
   createPersistentResponseCompletionOrchestrator,
 } from '../src/main/workflows/index.ts';
+import { createTalkinAIDesktopApi } from '../src/preload/bridge.ts';
+import { createRendererDesktopClient } from '../src/renderer/lib/ipc/client.ts';
+import {
+  createDesktopQueryDescriptor,
+  DesktopQueryCache,
+} from '../src/renderer/lib/ipc/query-client.ts';
+import type { DesktopInvalidationEvent } from '../src/shared/ipc/contracts.ts';
 
 const mainIndexSource = readFileSync(
   new URL('../src/main/index.ts', import.meta.url),
@@ -65,6 +77,42 @@ function createGateway(
   return {
     async infer() {
       return result;
+    },
+  };
+}
+
+type Handler = (_event: unknown, request: unknown) => Promise<unknown> | unknown;
+type EventListener = (_event: unknown, payload: unknown) => void;
+
+function createFakeIpcRuntime() {
+  const handlers = new Map<string, Handler>();
+  const listeners = new Map<string, Set<EventListener>>();
+
+  return {
+    ipcMain: {
+      handle(channel: string, listener: Handler) {
+        handlers.set(channel, listener);
+      },
+    },
+    ipcRenderer: {
+      async invoke(channel: string, payload: unknown) {
+        const handler = handlers.get(channel);
+        assert.ok(handler, `No handler registered for ${channel}`);
+        return handler({}, payload);
+      },
+      on(channel: string, listener: EventListener) {
+        const current = listeners.get(channel) ?? new Set<EventListener>();
+        current.add(listener);
+        listeners.set(channel, current);
+      },
+      off(channel: string, listener: EventListener) {
+        listeners.get(channel)?.delete(listener);
+      },
+    },
+    broadcast(channel: string, payload: unknown) {
+      for (const listener of listeners.get(channel) ?? []) {
+        listener({}, payload);
+      }
     },
   };
 }
@@ -121,6 +169,18 @@ async function waitFor<TValue>(
       return value;
     }
 
+    if (Date.now() > timeoutAt) {
+      throw new Error(`Timed out waiting for ${label}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function waitForAssertion(assertion: () => boolean, label: string) {
+  const timeoutAt = Date.now() + 1_500;
+
+  while (!assertion()) {
     if (Date.now() > timeoutAt) {
       throw new Error(`Timed out waiting for ${label}`);
     }
@@ -225,6 +285,57 @@ async function promoteRunToOptimizing(options: {
         details: {
           source: 'test-restart-recovery',
         },
+      });
+    });
+  } finally {
+    await persistence.close();
+  }
+}
+
+async function completeRunForStartupSync(options: {
+  dbPath: string;
+  runId: string;
+  conversationId: string;
+  taskId: string;
+  assistantMessage: string;
+  completedAt: string;
+  createId: (prefix: string) => string;
+}) {
+  const handle = await openSqliteDatabase(options.dbPath);
+  await migrateDesktopSchema(handle.connection);
+  const persistence = createChatRunPersistence(handle.connection);
+
+  try {
+    await persistence.transaction(async (tx) => {
+      await tx.messages.create({
+        id: options.createId('message'),
+        conversationId: options.conversationId,
+        role: 'assistant',
+        contentKo: options.assistantMessage,
+        runId: options.runId,
+        createdAt: options.completedAt,
+      });
+      await tx.runRecords.updateStatus({
+        runId: options.runId,
+        status: 'completed',
+        endedAt: options.completedAt,
+        errorCode: null,
+      });
+      await tx.runStages.create({
+        id: options.createId('stage'),
+        runId: options.runId,
+        stage: 'completed',
+        status: 'completed',
+        startedAt: options.completedAt,
+        endedAt: options.completedAt,
+        details: {
+          source: 'test-startup-sync',
+        },
+      });
+      await tx.tasks.updateActivity({
+        taskId: options.taskId,
+        updatedAt: options.completedAt,
+        lastActivityAt: options.completedAt,
       });
     });
   } finally {
@@ -587,6 +698,243 @@ test('story-6.3:VAL-3 and story-6.3:AC-3 retry after interrupted-after-dispatch 
     assert.equal(completedFeed.messages[0]?.contentKo, '프로젝트 상태 보고서를 다시 정리해줘.\n표와 체크리스트를 유지해줘.');
     assert.match(completedFeed.messages[1]?.contentKo ?? '', /재시도 후 한국어 응답/);
   } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-6.4:VAL-3 and story-6.4:AC-4 restart recovery invalidates stale startup projections when another settled task is initially active', async () => {
+  const temp = createTempDatabase();
+  const runtime = createFakeIpcRuntime();
+  const now = createSequentialNow('2026-06-09T06:00:00.000Z');
+  const createId = createDeterministicIdFactory();
+
+  registerDesktopIpcHandlers(runtime.ipcMain, {
+    broadcast: runtime.broadcast,
+    boardService: createPersistentBoardService({
+      dbPath: temp.dbPath,
+      now,
+    }),
+    chatHistoryService: createPersistentChatHistoryService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+    projectService: createPersistentProjectService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+    workbenchService: createPersistentWorkbenchService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+  });
+
+  const api = createTalkinAIDesktopApi(runtime.ipcRenderer, {
+    channel: 'desktop-shell',
+    platform: 'darwin',
+  });
+  const client = createRendererDesktopClient(api);
+  const queryCache = new DesktopQueryCache(client);
+  const receivedEvents: DesktopInvalidationEvent[] = [];
+  const unsubscribe = client.events.onInvalidation((payload) => {
+    receivedEvents.push(payload);
+  });
+
+  try {
+    const project = await client.commands.createProject({
+      name: '운영 복구',
+      description: 'startup recovery projection refresh 테스트용 프로젝트',
+      goal: '다른 task가 active여도 restart recovery가 stale 화면을 자동으로 갱신해야 한다.',
+    });
+    const settledTask = await client.commands.submitPrompt({
+      promptKo: '완료된 작업으로 남겨둘 운영 정리 요청입니다.',
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'balanced',
+    });
+    const recoveringTask = await client.commands.submitPrompt({
+      promptKo: '복구 대상인 장문 작업입니다.\n체크리스트와 숫자 42를 유지해줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+    });
+
+    await client.commands.setTaskProject({
+      taskId: recoveringTask.taskId,
+      projectId: project.projectId,
+    });
+    await client.commands.openInWorkbench({
+      taskId: recoveringTask.taskId,
+    });
+
+    await promoteRunToInterruptedCloudPending({
+      dbPath: temp.dbPath,
+      runId: recoveringTask.runId,
+      createId,
+      now: createSequentialNow('2026-06-09T06:06:00.000Z'),
+    });
+    await completeRunForStartupSync({
+      dbPath: temp.dbPath,
+      runId: settledTask.runId,
+      conversationId: settledTask.conversationId,
+      taskId: settledTask.taskId,
+      assistantMessage: '정리된 운영 답변입니다.',
+      completedAt: '2026-06-09T06:10:00.000Z',
+      createId,
+    });
+
+    const chatFeedQuery = createDesktopQueryDescriptor('getChatFeed', {});
+    const workbenchQuery = createDesktopQueryDescriptor('getWorkbenchLayout', {});
+    const boardQuery = createDesktopQueryDescriptor('getBoardColumns', {});
+    const projectDetailQuery = createDesktopQueryDescriptor('getProjectDetail', {
+      projectId: project.projectId,
+    });
+
+    await Promise.all([
+      queryCache.fetchQuery(chatFeedQuery),
+      queryCache.fetchQuery(workbenchQuery),
+      queryCache.fetchQuery(boardQuery),
+      queryCache.fetchQuery(projectDetailQuery),
+    ]);
+
+    const initialChatFeed = queryCache.getSnapshot(chatFeedQuery).data;
+    const initialBoard = queryCache.getSnapshot(boardQuery).data;
+
+    assert.equal(initialChatFeed?.activeTaskId, settledTask.taskId);
+
+    const initialRecoverCard =
+      initialBoard?.columns
+        .flatMap((column) => column.cards)
+        .find((card) => card.taskId === recoveringTask.taskId) ?? null;
+
+    assert.ok(initialRecoverCard);
+
+    const invalidationEmitter = createDesktopInvalidationEmitter({
+      broadcast: runtime.broadcast,
+    });
+    const translationAdapter = createTranslationMcpAdapter({
+      processType: 'browser',
+      runtime: createFakeTranslationMcpRuntime({}),
+    });
+    const settingsService = createInMemoryAppSettingsService(defaultAppSettings);
+    const responseCompletionOrchestrator = createPersistentResponseCompletionOrchestrator({
+      dbPath: temp.dbPath,
+      translationAdapter,
+      settingsService,
+      cloudInferenceGateway: createGateway({
+        ok: true,
+        provider: 'openai',
+        model: 'gpt-4.1',
+        responseEnglish: 'unused',
+        latencyMs: 1,
+      }),
+      now: createSequentialNow('2026-06-09T06:20:00.000Z'),
+      createId,
+      emitInvalidation(targets) {
+        invalidationEmitter.emit(
+          {
+            type: 'workflow',
+            name: 'responseCompletion',
+          },
+          targets,
+        );
+      },
+    });
+    const optimizationStageOrchestrator = createPersistentOptimizationStageOrchestrator({
+      dbPath: temp.dbPath,
+      translationAdapter,
+      now: createSequentialNow('2026-06-09T06:20:00.000Z'),
+      createId,
+      emitInvalidation(targets) {
+        invalidationEmitter.emit(
+          {
+            type: 'workflow',
+            name: 'optimizationStage',
+          },
+          targets,
+        );
+      },
+      dispatchOptimizedRun(input) {
+        return responseCompletionOrchestrator.completeOptimizedRun(input);
+      },
+    });
+    const recoveryService = createPersistentRestartRecoveryService({
+      dbPath: temp.dbPath,
+      optimizationStageOrchestrator,
+      responseCompletionOrchestrator,
+      now: createSequentialNow('2026-06-09T06:21:00.000Z'),
+      createId,
+      emitInvalidation(targets) {
+        invalidationEmitter.emit(
+          {
+            type: 'workflow',
+            name: 'restartRecovery',
+          },
+          targets,
+        );
+      },
+    });
+
+    const recoveryResult = await recoveryService.recoverInterruptedRuns();
+
+    await waitForAssertion(() => {
+      const chatFeed = queryCache.getSnapshot(chatFeedQuery).data;
+      const workbench = queryCache.getSnapshot(workbenchQuery).data;
+      const board = queryCache.getSnapshot(boardQuery).data;
+      const projectDetail = queryCache.getSnapshot(projectDetailQuery).data;
+      const recoveredBoardCard =
+        board?.columns
+          .flatMap((column) => column.cards)
+          .find((card) => card.taskId === recoveringTask.taskId) ?? null;
+      const recoveredPanel =
+        workbench?.panels.find((panel) => panel.taskId === recoveringTask.taskId) ?? null;
+      const recoveredProjectTask =
+        projectDetail?.tasks.find((task) => task.taskId === recoveringTask.taskId) ?? null;
+
+      return (
+        chatFeed?.activeTaskId === recoveringTask.taskId &&
+        chatFeed?.activeRun?.status === 'failed' &&
+        recoveredPanel?.conversation?.activeRun?.status === 'failed' &&
+        recoveredBoardCard?.lastActivityAt === recoveredProjectTask?.lastActivityAt &&
+        recoveredBoardCard?.lastActivityAt !== initialRecoverCard.lastActivityAt
+      );
+    }, 'restart recovery projections to refetch automatically');
+
+    const recoveredChatFeed = queryCache.getSnapshot(chatFeedQuery).data;
+    const recoveredWorkbench = queryCache.getSnapshot(workbenchQuery).data;
+    const recoveredBoard = queryCache.getSnapshot(boardQuery).data;
+    const recoveredProjectDetail = queryCache.getSnapshot(projectDetailQuery).data;
+    const recoveredBoardCard =
+      recoveredBoard?.columns
+        .flatMap((column) => column.cards)
+        .find((card) => card.taskId === recoveringTask.taskId) ?? null;
+    const recoveredPanel =
+      recoveredWorkbench?.panels.find((panel) => panel.taskId === recoveringTask.taskId) ?? null;
+    const recoveredProjectTask =
+      recoveredProjectDetail?.tasks.find((task) => task.taskId === recoveringTask.taskId) ?? null;
+
+    assert.deepEqual(recoveryResult.resumedQueuedRunIds, []);
+    assert.deepEqual(recoveryResult.resumedOptimizedRunIds, []);
+    assert.deepEqual(recoveryResult.interruptedAfterDispatchRunIds, [recoveringTask.runId]);
+    assert.equal(recoveredChatFeed?.activeTaskId, recoveringTask.taskId);
+    assert.equal(recoveredChatFeed?.activeRun?.status, 'failed');
+    assert.equal(recoveredChatFeed?.activeRun?.errorCode, 'interrupted_after_dispatch');
+    assert.equal(recoveredPanel?.conversation?.activeRun?.status, 'failed');
+    assert.equal(recoveredBoardCard?.lastActivityAt, recoveredProjectTask?.lastActivityAt);
+    assert.notEqual(recoveredBoardCard?.lastActivityAt, initialRecoverCard.lastActivityAt);
+    assert.ok(
+      receivedEvents.some(
+        (event) =>
+          event.source.type === 'workflow' &&
+          event.source.name === 'restartRecovery' &&
+          event.targets.some(
+            (target) => target.kind === 'projection' && target.projection === 'chatFeed',
+          ),
+      ),
+    );
+  } finally {
+    unsubscribe();
+    queryCache.dispose();
     temp.cleanup();
   }
 });

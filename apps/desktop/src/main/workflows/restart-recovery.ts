@@ -7,6 +7,10 @@ import {
   type ChatRunPersistenceScope,
   type RunRecord,
 } from '../persistence/index.ts';
+import {
+  buildTaskProjectionInvalidationTargets,
+  mergeInvalidationTargets,
+} from '../ipc/invalidation.ts';
 import type { OptimizationStageOrchestrator } from './optimization-stage.ts';
 import type { ResponseCompletionOrchestrator } from './response-completion.ts';
 
@@ -14,6 +18,8 @@ type OrchestratorCreateId = (prefix: string) => string;
 
 type ResumableOptimizedRun = {
   runId: string;
+  taskId: string;
+  conversationId: string;
   model: RunRecord['model'];
   mode: RunRecord['mode'];
   optimizedEnglish: string;
@@ -35,6 +41,7 @@ export type CreatePersistentRestartRecoveryServiceOptions = {
   responseCompletionOrchestrator: ResponseCompletionOrchestrator;
   now?: () => string;
   createId?: OrchestratorCreateId;
+  emitInvalidation?: (targets: ReturnType<typeof buildTaskProjectionInvalidationTargets>) => void;
 };
 
 type SqlitePersistenceHandle = {
@@ -119,6 +126,11 @@ export function createPersistentRestartRecoveryService(
           const queuedRunIds: string[] = [];
           const optimizedRuns: ResumableOptimizedRun[] = [];
           const interruptedRunIds: string[] = [];
+          const directlyMutatedRuns: Array<{
+            taskId: string;
+            conversationId: string;
+            runId: string;
+          }> = [];
           const candidateRuns = await tx.runRecords.listByStatuses([
             'queued',
             'optimizing',
@@ -164,6 +176,11 @@ export function createPersistentRestartRecoveryService(
                 lastActivityAt: recoveredAt,
               });
               queuedRunIds.push(run.id);
+              directlyMutatedRuns.push({
+                taskId: run.taskId,
+                conversationId: run.conversationId,
+                runId: run.id,
+              });
               continue;
             }
 
@@ -206,11 +223,18 @@ export function createPersistentRestartRecoveryService(
                   updatedAt: failedAt,
                   lastActivityAt: failedAt,
                 });
+                directlyMutatedRuns.push({
+                  taskId: run.taskId,
+                  conversationId: run.conversationId,
+                  runId: run.id,
+                });
                 continue;
               }
 
               optimizedRuns.push({
                 runId: run.id,
+                taskId: run.taskId,
+                conversationId: run.conversationId,
                 model: run.model,
                 mode: run.mode,
                 optimizedEnglish: optimizedPrompt.content,
@@ -228,6 +252,11 @@ export function createPersistentRestartRecoveryService(
                 now: now(),
                 createId,
               });
+              directlyMutatedRuns.push({
+                taskId: run.taskId,
+                conversationId: run.conversationId,
+                runId: run.id,
+              });
             }
           }
 
@@ -235,8 +264,26 @@ export function createPersistentRestartRecoveryService(
             queuedRunIds,
             optimizedRuns,
             interruptedRunIds,
+            invalidationTargets: mergeInvalidationTargets([
+              ...directlyMutatedRuns.map((run) =>
+                buildTaskProjectionInvalidationTargets({
+                  taskId: run.taskId,
+                  conversationId: run.conversationId,
+                  runId: run.runId,
+                }),
+              ),
+              ...optimizedRuns.map((run) =>
+                buildTaskProjectionInvalidationTargets({
+                  taskId: run.taskId,
+                  conversationId: run.conversationId,
+                  runId: run.runId,
+                }),
+              ),
+            ]),
           };
         });
+
+        options.emitInvalidation?.(recoveryPlan.invalidationTargets);
 
         for (const runId of recoveryPlan.queuedRunIds) {
           await options.optimizationStageOrchestrator.optimizeQueuedRun({

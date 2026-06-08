@@ -752,6 +752,10 @@ export type DesktopInvalidationEvent = {
         name: DesktopCommandName;
       }
     | {
+        type: 'workflow';
+        name: 'optimizationStage' | 'responseCompletion' | 'restartRecovery';
+      }
+    | {
         type: 'system';
         name: 'bootstrap';
       };
