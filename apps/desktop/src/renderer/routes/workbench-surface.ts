@@ -1,13 +1,61 @@
 import type {
+  ChatFeedMessage,
+  ChatFeedRunSummary,
   PanelSlot,
   TaskStatus,
   WorkbenchLayoutResult,
   WorkbenchPanel,
+  WorkbenchPanelConversation,
   WorkbenchRecentTask,
 } from '../../shared/ipc/contracts.ts';
 import { resolveWorkbenchPanelSlot } from '../../shared/ipc/workbench.ts';
 
 export type WorkbenchRouteQueryStatus = 'idle' | 'loading' | 'success' | 'error';
+
+export type WorkbenchPanelSubmitState = {
+  status: 'idle' | 'submitting' | 'success' | 'error';
+  message: string | null;
+};
+
+export type WorkbenchPanelComposerState = {
+  draft: string;
+  pendingSubmission: ChatFeedMessage | null;
+  submitState: WorkbenchPanelSubmitState;
+};
+
+export type WorkbenchComposerState = Record<PanelSlot, WorkbenchPanelComposerState>;
+
+export type WorkbenchComposerAction =
+  | {
+      type: 'draft_changed';
+      slot: PanelSlot;
+      draft: string;
+    }
+  | {
+      type: 'submit_started';
+      slot: PanelSlot;
+    }
+  | {
+      type: 'submit_succeeded';
+      slot: PanelSlot;
+      pendingSubmission: ChatFeedMessage;
+    }
+  | {
+      type: 'submit_failed';
+      slot: PanelSlot;
+      message: string;
+    }
+  | {
+      type: 'pending_submission_committed';
+      slot: PanelSlot;
+    };
+
+type WorkbenchPanelActivityItem = {
+  id: string;
+  label: string;
+  detail: string;
+  tone: 'neutral' | 'progress' | 'success' | 'error';
+};
 
 type PreviewTaskSeed = Omit<WorkbenchRecentTask, 'isOpen' | 'panelSlot'> & {
   panelSlot: PanelSlot | null;
@@ -49,22 +97,268 @@ const previewTaskSeeds: PreviewTaskSeed[] = [
   },
 ];
 
+export const workbenchSlotLabels: Record<PanelSlot, string> = {
+  'north-west': 'Panel A',
+  'north-east': 'Panel B',
+  'south-west': 'Panel C',
+  'south-east': 'Panel D',
+};
+
+export const workbenchSurfaceCopy = {
+  headline: '같은 작업을 그대로 이어 붙이는 멀티채팅 작업대',
+  intro:
+    '최근 작업 레일에서 방금 보던 task를 고르고, 오른쪽 패널에서 같은 대화를 이어가세요. 새 대화를 복제하지 않고 기존 작업을 재사용합니다.',
+  railTitle: '최근 이어보기',
+  railDescription: '최근 활동 순으로 정렬된 task를 골라 오른쪽 패널에 배치하거나, 이미 열려 있다면 그 위치로 바로 이동합니다.',
+  railLoadingTitle: '최근 작업을 정리하고 있습니다',
+  railLoadingBody: '작업대 레일과 패널 상태를 같은 source of truth에서 다시 불러오는 중입니다.',
+  railErrorTitle: '작업대를 불러오지 못했습니다',
+  railErrorBody: '채팅에서 다시 이어 열거나 잠시 후 작업대를 새로 열어 보세요.',
+  railEmptyTitle: '아직 열린 task가 없습니다',
+  railEmptyBody: '먼저 채팅에서 작업을 만들거나 아래 빈 패널로 새 대화를 시작해 보세요.',
+  stageTitle: '활성 패널',
+  stageDescription:
+    '왼쪽 레일은 어떤 task를 다룰지 고르는 곳이고, 오른쪽 패널은 실제 대화와 상태를 이어가는 작업 공간입니다.',
+  panelInputPlaceholder:
+    '같은 작업에 이어 붙일 추가 한국어 지시를 입력하세요. 원문은 이 task 대화 히스토리에 그대로 남습니다.',
+  panelSubmitSavingMessage: '같은 task에 추가 지시를 저장하고 있습니다.',
+  panelSubmitSavedMessage: '같은 task에 추가 지시가 저장되었습니다.',
+  panelSubmitErrorMessage:
+    '추가 지시를 저장하지 못했습니다. 작성 중이던 한국어 초안은 그대로 남아 있습니다.',
+  panelActivityTitle: '최근 활동',
+  panelComposerTitle: '추가 지시',
+  panelComposerBody: '이 패널 안에서 같은 task와 conversation을 그대로 이어갑니다.',
+  panelSubmitAction: '같은 작업 이어서 보내기',
+} as const;
+
+function createIdleWorkbenchPanelSubmitState(): WorkbenchPanelSubmitState {
+  return {
+    status: 'idle',
+    message: null,
+  };
+}
+
+function createEmptyWorkbenchPanelComposerState(): WorkbenchPanelComposerState {
+  return {
+    draft: '',
+    pendingSubmission: null,
+    submitState: createIdleWorkbenchPanelSubmitState(),
+  };
+}
+
+export function createWorkbenchComposerState(): WorkbenchComposerState {
+  return {
+    'north-west': createEmptyWorkbenchPanelComposerState(),
+    'north-east': createEmptyWorkbenchPanelComposerState(),
+    'south-west': createEmptyWorkbenchPanelComposerState(),
+    'south-east': createEmptyWorkbenchPanelComposerState(),
+  };
+}
+
+export function workbenchComposerReducer(
+  state: WorkbenchComposerState,
+  action: WorkbenchComposerAction,
+): WorkbenchComposerState {
+  const current = state[action.slot];
+
+  switch (action.type) {
+    case 'draft_changed':
+      return {
+        ...state,
+        [action.slot]: {
+          ...current,
+          draft: action.draft,
+          submitState:
+            current.submitState.status === 'idle'
+              ? current.submitState
+              : createIdleWorkbenchPanelSubmitState(),
+        },
+      };
+    case 'submit_started':
+      return {
+        ...state,
+        [action.slot]: {
+          ...current,
+          submitState: {
+            status: 'submitting',
+            message: workbenchSurfaceCopy.panelSubmitSavingMessage,
+          },
+        },
+      };
+    case 'submit_succeeded':
+      return {
+        ...state,
+        [action.slot]: {
+          draft: '',
+          pendingSubmission: action.pendingSubmission,
+          submitState: {
+            status: 'success',
+            message: workbenchSurfaceCopy.panelSubmitSavedMessage,
+          },
+        },
+      };
+    case 'submit_failed':
+      return {
+        ...state,
+        [action.slot]: {
+          ...current,
+          submitState: {
+            status: 'error',
+            message: action.message,
+          },
+        },
+      };
+    case 'pending_submission_committed':
+      return {
+        ...state,
+        [action.slot]: {
+          ...current,
+          pendingSubmission: null,
+        },
+      };
+  }
+}
+
+function createPreviewConversation(taskId: string): WorkbenchPanelConversation | null {
+  if (taskId === 'task-001') {
+    const messages: ChatFeedMessage[] = [
+      {
+        messageId: 'preview-message-101',
+        conversationId: 'preview-conversation-001',
+        runId: 'preview-run-101',
+        role: 'user',
+        contentKo: '신규 파트너 제안서 초안을 한국어로 구조화해줘.',
+        createdAt: '2026-06-08T01:02:00.000Z',
+      },
+      {
+        messageId: 'preview-message-102',
+        conversationId: 'preview-conversation-001',
+        runId: 'preview-run-101',
+        role: 'assistant',
+        contentKo: '시장 배경, 수익 모델, 제안 구조, 리스크 대응까지 네 블록으로 초안을 정리했습니다.',
+        createdAt: '2026-06-08T01:04:00.000Z',
+      },
+      {
+        messageId: 'preview-message-103',
+        conversationId: 'preview-conversation-001',
+        runId: 'preview-run-102',
+        role: 'user',
+        contentKo: '2번 섹션을 파트너 수익 배분 기준 중심으로 더 구체화해줘.',
+        createdAt: '2026-06-08T01:12:00.000Z',
+      },
+    ];
+    const runs: ChatFeedRunSummary[] = [
+      {
+        runId: 'preview-run-101',
+        sourceMessageId: 'preview-message-101',
+        status: 'completed',
+        stage: 'completed',
+        model: 'claude-sonnet-4',
+        mode: 'quality',
+        errorCode: null,
+        failure: null,
+        usage: {
+          baselineInputTokens: 1280,
+          optimizedInputTokens: 846,
+          outputTokens: 931,
+          latencyMs: 6200,
+          savingsRate: 34,
+          isEstimated: false,
+        },
+      },
+      {
+        runId: 'preview-run-102',
+        sourceMessageId: 'preview-message-103',
+        status: 'cloud_pending',
+        stage: 'cloud_pending',
+        model: 'claude-sonnet-4',
+        mode: 'quality',
+        errorCode: null,
+        failure: null,
+        usage: null,
+      },
+    ];
+
+    return {
+      conversationId: 'preview-conversation-001',
+      messages,
+      runs,
+      activeRun: runs[runs.length - 1] ?? null,
+    };
+  }
+
+  if (taskId === 'task-002') {
+    const messages: ChatFeedMessage[] = [
+      {
+        messageId: 'preview-message-201',
+        conversationId: 'preview-conversation-002',
+        runId: 'preview-run-201',
+        role: 'user',
+        contentKo: '40페이지 리서치를 핵심 숫자와 리스크 중심으로 7개 항목만 남겨 요약해줘.',
+        createdAt: '2026-06-08T00:54:00.000Z',
+      },
+      {
+        messageId: 'preview-message-202',
+        conversationId: 'preview-conversation-002',
+        runId: 'preview-run-201',
+        role: 'assistant',
+        contentKo: 'TAM, CAC, 전환율, 경쟁사 비교, 규제 리스크를 포함한 7개 핵심 항목으로 압축했습니다.',
+        createdAt: '2026-06-08T00:58:00.000Z',
+      },
+    ];
+    const runs: ChatFeedRunSummary[] = [
+      {
+        runId: 'preview-run-201',
+        sourceMessageId: 'preview-message-201',
+        status: 'completed',
+        stage: 'completed',
+        model: 'gpt-4.1',
+        mode: 'long_context',
+        errorCode: null,
+        failure: null,
+        usage: {
+          baselineInputTokens: 1924,
+          optimizedInputTokens: 1135,
+          outputTokens: 742,
+          latencyMs: 8400,
+          savingsRate: 41,
+          isEstimated: false,
+        },
+      },
+    ];
+
+    return {
+      conversationId: 'preview-conversation-002',
+      messages,
+      runs,
+      activeRun: runs[runs.length - 1] ?? null,
+    };
+  }
+
+  return null;
+}
+
+function createPreviewPanelForTask(taskId: string): WorkbenchPanel {
+  const task = previewTaskSeeds.find((item) => item.taskId === taskId);
+
+  if (!task || task.panelSlot === null) {
+    return createPreviewEmptyPanel('south-west');
+  }
+
+  return {
+    slot: task.panelSlot,
+    taskId: task.taskId,
+    title: task.title,
+    status: task.status,
+    note: `${task.projectName} · ${task.toolSummary}`,
+    conversation: createPreviewConversation(task.taskId),
+  };
+}
+
 function createPreviewPanels(): WorkbenchPanel[] {
   return [
-    {
-      slot: 'north-west',
-      taskId: 'task-001',
-      title: '신규 파트너 제안서 초안',
-      status: 'in_progress',
-      note: '좌측 인박스에서 이어온 작업',
-    },
-    {
-      slot: 'north-east',
-      taskId: 'task-002',
-      title: '40페이지 리서치 요약',
-      status: 'ai_review',
-      note: '리서치 요약 패널',
-    },
+    createPreviewPanelForTask('task-001'),
+    createPreviewPanelForTask('task-002'),
     createPreviewEmptyPanel('south-west'),
     createPreviewEmptyPanel('south-east'),
   ];
@@ -76,13 +370,6 @@ function createPreviewRecentTasks(): WorkbenchRecentTask[] {
     isOpen: task.panelSlot !== null,
   }));
 }
-
-export const workbenchSlotLabels: Record<PanelSlot, string> = {
-  'north-west': 'Panel A',
-  'north-east': 'Panel B',
-  'south-west': 'Panel C',
-  'south-east': 'Panel D',
-};
 
 function createPreviewEmptyPanel(slot: PanelSlot): WorkbenchPanel {
   const titleBySlot: Record<PanelSlot, string> = {
@@ -104,25 +391,9 @@ function createPreviewEmptyPanel(slot: PanelSlot): WorkbenchPanel {
     title: titleBySlot[slot],
     status: 'idle',
     note: noteBySlot[slot],
+    conversation: null,
   };
 }
-
-export const workbenchSurfaceCopy = {
-  headline: '같은 작업을 그대로 이어 붙이는 멀티채팅 작업대',
-  intro:
-    '최근 작업 레일에서 방금 보던 task를 고르고, 오른쪽 패널에서 같은 대화를 이어가세요. 새 대화를 복제하지 않고 기존 작업을 재사용합니다.',
-  railTitle: '최근 이어보기',
-  railDescription: '최근 활동 순으로 정렬된 task를 골라 오른쪽 패널에 배치하거나, 이미 열려 있다면 그 위치로 바로 이동합니다.',
-  railLoadingTitle: '최근 작업을 정리하고 있습니다',
-  railLoadingBody: '작업대 레일과 패널 상태를 같은 source of truth에서 다시 불러오는 중입니다.',
-  railErrorTitle: '작업대를 불러오지 못했습니다',
-  railErrorBody: '채팅에서 다시 이어 열거나 잠시 후 작업대를 새로 열어 보세요.',
-  railEmptyTitle: '아직 열린 task가 없습니다',
-  railEmptyBody: '먼저 채팅에서 작업을 만들거나 아래 빈 패널로 새 대화를 시작해 보세요.',
-  stageTitle: '활성 패널',
-  stageDescription:
-    '왼쪽 레일은 어떤 task를 다룰지 고르는 곳이고, 오른쪽 패널은 실제 대화와 상태를 이어가는 작업 공간입니다.',
-};
 
 export const previewWorkbenchLayout: WorkbenchLayoutResult = {
   layoutId: 'layout-preview',
@@ -191,6 +462,114 @@ export function getWorkbenchStatusLabel(status: TaskStatus | 'idle') {
   }
 }
 
+export function getLatestWorkbenchPanelRun(panel: WorkbenchPanel) {
+  return panel.conversation?.activeRun ?? panel.conversation?.runs[panel.conversation.runs.length - 1] ?? null;
+}
+
+export function hasInFlightWorkbenchRun(run: ChatFeedRunSummary | null) {
+  return (
+    run !== null &&
+    run.status !== 'completed' &&
+    run.status !== 'failed'
+  );
+}
+
+function summarizeMessage(contentKo: string) {
+  const collapsed = contentKo.replace(/\s+/g, ' ').trim();
+
+  if (collapsed.length <= 56) {
+    return collapsed;
+  }
+
+  return `${collapsed.slice(0, 56).trimEnd()}...`;
+}
+
+function getRunStatusLabel(run: ChatFeedRunSummary) {
+  switch (run.status) {
+    case 'queued':
+      return '실행 대기';
+    case 'optimizing':
+      return '로컬 최적화 중';
+    case 'optimized':
+      return '영문 프롬프트 준비';
+    case 'cloud_pending':
+      return '모델 응답 대기';
+    case 'restoring':
+      return '한국어 복원 중';
+    case 'completed':
+      return '응답 저장 완료';
+    case 'failed':
+      return '실행 실패';
+  }
+}
+
+export function getWorkbenchPanelActivityItems(panel: WorkbenchPanel): WorkbenchPanelActivityItem[] {
+  if (!panel.conversation) {
+    return [];
+  }
+
+  const latestRun = getLatestWorkbenchPanelRun(panel);
+  const latestUserMessage =
+    [...panel.conversation.messages].reverse().find((message) => message.role === 'user') ?? null;
+  const latestAssistantMessage =
+    [...panel.conversation.messages].reverse().find((message) => message.role === 'assistant') ?? null;
+  const items: WorkbenchPanelActivityItem[] = [];
+
+  if (latestRun) {
+    items.push({
+      id: `run-${latestRun.runId}`,
+      label: getRunStatusLabel(latestRun),
+      detail:
+        latestRun.status === 'failed'
+          ? latestRun.failure?.message ?? '같은 task의 최근 실행이 안전하게 멈췄습니다.'
+          : latestRun.usage
+            ? `${latestRun.usage.savingsRate}% 절감 · ${latestRun.usage.latencyMs}ms`
+            : '같은 task에서 최신 실행이 진행 중입니다.',
+      tone:
+        latestRun.status === 'failed'
+          ? 'error'
+          : latestRun.status === 'completed'
+            ? 'success'
+            : 'progress',
+    });
+  }
+
+  if (latestUserMessage) {
+    items.push({
+      id: `user-${latestUserMessage.messageId}`,
+      label: '최근 추가 지시',
+      detail: summarizeMessage(latestUserMessage.contentKo),
+      tone: 'neutral',
+    });
+  }
+
+  if (latestAssistantMessage) {
+    items.push({
+      id: `assistant-${latestAssistantMessage.messageId}`,
+      label: '최근 한국어 응답',
+      detail: summarizeMessage(latestAssistantMessage.contentKo),
+      tone: 'neutral',
+    });
+  }
+
+  return items;
+}
+
+export function mergeWorkbenchPanelMessages(
+  persistedMessages: ChatFeedMessage[],
+  pendingSubmission: ChatFeedMessage | null,
+) {
+  if (!pendingSubmission) {
+    return persistedMessages;
+  }
+
+  if (persistedMessages.some((message) => message.messageId === pendingSubmission.messageId)) {
+    return persistedMessages;
+  }
+
+  return [...persistedMessages, pendingSubmission];
+}
+
 export function placeWorkbenchTaskInPreview(
   layout: WorkbenchLayoutResult,
   taskId: string,
@@ -234,6 +613,7 @@ export function placeWorkbenchTaskInPreview(
             title: task.title,
             status: task.status,
             note: `${task.projectName} · ${task.toolSummary}`,
+            conversation: createPreviewConversation(task.taskId),
           }
         : panel,
     ),
@@ -296,6 +676,7 @@ export function moveWorkbenchPanelInPreview(
           title: targetTask.title,
           status: targetTask.status,
           note: `${targetTask.projectName} · ${targetTask.toolSummary}`,
+          conversation: createPreviewConversation(targetTask.taskId),
         };
       }
 
@@ -306,6 +687,7 @@ export function moveWorkbenchPanelInPreview(
           title: sourceTask.title,
           status: sourceTask.status,
           note: `${sourceTask.projectName} · ${sourceTask.toolSummary}`,
+          conversation: createPreviewConversation(sourceTask.taskId),
         };
       }
 

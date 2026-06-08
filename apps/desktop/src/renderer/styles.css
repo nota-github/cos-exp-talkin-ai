@@ -840,6 +840,9 @@ button {
   display: grid;
   gap: 14px;
   align-content: start;
+  padding: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 251, 255, 0.96) 100%);
 }
 
 .workbench-panel-active {
@@ -872,8 +875,112 @@ button {
   border-top: 1px solid var(--line);
 }
 
+.workbench-panel-title-row,
+.workbench-panel-badges,
+.workbench-panel-section-header,
+.workbench-panel-compose-footer,
+.workbench-activity-log {
+  display: flex;
+  gap: 10px;
+}
+
+.workbench-panel-title-row,
+.workbench-panel-section-header,
+.workbench-panel-compose-footer {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.workbench-panel-title-row {
+  flex-wrap: wrap;
+}
+
+.workbench-panel-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workbench-panel-feed,
+.workbench-panel-activity,
+.workbench-panel-compose {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(20, 80, 189, 0.1);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.workbench-panel-section-header {
+  border-bottom: 1px solid rgba(15, 39, 68, 0.08);
+  padding-bottom: 12px;
+}
+
+.workbench-panel-section-header p {
+  margin-top: 6px;
+}
+
+.workbench-panel-feed-list {
+  display: grid;
+  gap: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.workbench-bubble {
+  margin: 0;
+}
+
+.workbench-activity-log {
+  flex-wrap: wrap;
+}
+
+.workbench-activity-item {
+  flex: 1 1 170px;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 39, 68, 0.08);
+  background: rgba(244, 248, 252, 0.84);
+}
+
+.workbench-activity-item-success {
+  border-color: rgba(35, 163, 123, 0.18);
+  background: rgba(229, 251, 246, 0.82);
+}
+
+.workbench-activity-item-progress {
+  border-color: rgba(34, 118, 245, 0.16);
+  background: rgba(239, 248, 255, 0.9);
+}
+
+.workbench-activity-item-error {
+  border-color: rgba(20, 80, 189, 0.16);
+  background: rgba(244, 250, 255, 0.94);
+}
+
+.workbench-activity-item p {
+  color: var(--muted);
+}
+
+.workbench-panel-input {
+  min-height: 116px;
+}
+
+.workbench-panel-compose-footer {
+  gap: 16px;
+}
+
+.workbench-panel-submit {
+  min-width: 180px;
+}
+
 .workbench-panel-actions {
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .workbench-panel-close {

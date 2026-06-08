@@ -33,6 +33,10 @@ import {
   type SqliteConnection,
   type SqliteDatabaseHandle,
 } from '../persistence/database';
+import {
+  listConversationMessages,
+  listConversationRuns,
+} from '../chat/feed-projection.ts';
 
 type WorkbenchTaskRow = {
   task_id: string;
@@ -40,6 +44,7 @@ type WorkbenchTaskRow = {
   status: TaskStatus;
   project_name: string | null;
   last_activity_at: string;
+  conversation_id: string | null;
   selected_model: CloudModelId | null;
   mode: OptimizationMode | null;
   baseline_input_tokens: number | null;
@@ -155,6 +160,7 @@ function getPanelSlotsForResolution(panels: WorkbenchPanelRecord[]): WorkbenchPa
     title: '',
     status: 'idle',
     note: '',
+    conversation: null,
   }));
 }
 
@@ -189,6 +195,7 @@ function buildEmptyPanel(slot: PanelSlot): WorkbenchPanel {
     title: titleBySlot[slot],
     status: 'idle',
     note: noteBySlot[slot],
+    conversation: null,
   };
 }
 
@@ -202,6 +209,7 @@ async function listWorkbenchTaskRows(
       tasks.status AS status,
       projects.name AS project_name,
       tasks.last_activity_at AS last_activity_at,
+      conversations.id AS conversation_id,
       conversations.selected_model AS selected_model,
       conversations.mode AS mode,
       (
@@ -261,7 +269,8 @@ function buildWorkbenchLayoutResult(options: {
   panels: WorkbenchPanelRecord[];
   taskRows: WorkbenchTaskRow[];
   nowIso: string;
-}): WorkbenchLayoutResult {
+  connection: SqliteConnection;
+}): Promise<WorkbenchLayoutResult> {
   const panelBySlot = new Map(options.panels.map((panel) => [panel.panelSlot, panel]));
   const openTaskById = new Map(
     options.panels
@@ -290,38 +299,53 @@ function buildWorkbenchLayoutResult(options: {
     };
   });
 
-  const stagePanels = workbenchPanelSlots.map((slot) => {
-    const panelRecord = panelBySlot.get(slot);
+  return Promise.all(
+    workbenchPanelSlots.map(async (slot) => {
+      const panelRecord = panelBySlot.get(slot);
 
-    if (!panelRecord || !panelRecord.taskId) {
-      return buildEmptyPanel(slot);
-    }
+      if (!panelRecord || !panelRecord.taskId) {
+        return buildEmptyPanel(slot);
+      }
 
-    const task = taskRowById.get(panelRecord.taskId);
+      const task = taskRowById.get(panelRecord.taskId);
 
-    if (!task) {
-      return buildEmptyPanel(slot);
-    }
+      if (!task) {
+        return buildEmptyPanel(slot);
+      }
 
-    return {
-      slot,
-      taskId: task.task_id,
-      title: task.title,
-      status: task.status,
-      note: `${task.project_name ?? '개인 작업'} · ${buildToolSummary(
-        task.selected_model,
-        task.mode,
-      )}`,
-    } satisfies WorkbenchPanel;
-  });
+      const conversation =
+        task.conversation_id === null
+          ? null
+          : {
+              conversationId: task.conversation_id,
+              messages: await listConversationMessages(options.connection, task.conversation_id),
+              runs: await listConversationRuns(options.connection, task.conversation_id),
+              activeRun: null,
+            };
 
-  return {
+      if (conversation) {
+        conversation.activeRun = conversation.runs[conversation.runs.length - 1] ?? null;
+      }
+
+      return {
+        slot,
+        taskId: task.task_id,
+        title: task.title,
+        status: task.status,
+        note: `${task.project_name ?? '개인 작업'} · ${buildToolSummary(
+          task.selected_model,
+          task.mode,
+        )}`,
+        conversation,
+      } satisfies WorkbenchPanel;
+    }),
+  ).then((stagePanels) => ({
     layoutId: options.layout.id,
     updatedAt: getMaxUpdatedAt(options.layout, options.panels),
     activePanelSlot: getActivePanelSlot(options.panels),
     recentTasks,
     panels: stagePanels,
-  };
+  }));
 }
 
 async function readWorkbenchLayout(
@@ -341,6 +365,7 @@ async function readWorkbenchLayout(
     panels,
     taskRows,
     nowIso,
+    connection,
   });
 }
 

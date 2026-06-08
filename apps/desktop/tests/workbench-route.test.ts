@@ -7,8 +7,11 @@ import { createPersistentChatHistoryService } from '../src/main/chat/index.ts';
 import { createDesktopIpcService } from '../src/main/ipc/register-ipc.ts';
 import { openSqliteDatabase } from '../src/main/persistence/database.ts';
 import {
+  createWorkbenchComposerState,
   getWorkbenchSurfaceState,
+  mergeWorkbenchPanelMessages,
   previewWorkbenchLayout,
+  workbenchComposerReducer,
 } from '../src/renderer/routes/workbench-surface.ts';
 import { createPersistentWorkbenchService } from '../src/main/workbench/index.ts';
 
@@ -53,6 +56,41 @@ function createSequenceNow(...values: string[]) {
     index += 1;
     return value;
   };
+}
+
+async function markRunCompleted(dbPath: string, runId: string, completedAt: string) {
+  const handle = await openSqliteDatabase(dbPath);
+
+  try {
+    await handle.connection.exec(`
+      UPDATE run_records
+      SET status = 'completed',
+          ended_at = '${completedAt}',
+          error_code = NULL
+      WHERE id = '${runId}';
+    `);
+    await handle.connection.exec(`
+      INSERT INTO run_stages (
+        id,
+        run_id,
+        stage,
+        status,
+        started_at,
+        ended_at,
+        details_json
+      ) VALUES (
+        'stage-${runId}',
+        '${runId}',
+        'completed',
+        'completed',
+        '${completedAt}',
+        '${completedAt}',
+        '{"source":"test-complete"}'
+      );
+    `);
+  } finally {
+    await handle.close();
+  }
 }
 
 test('story-5.2:VAL-1 and story-5.2:AC-1 openInWorkbench keeps the same task and conversation after continuing from chat', async () => {
@@ -385,6 +423,219 @@ test('story-5.3:SCOPE-3 and story-5.3:AC-4 close clears panel assignment while t
     assert.match(workbenchRouteSource, /desktopClient\.commands\.closeWorkbenchPanel/);
     assert.match(workbenchRouteSource, /desktopClient\.commands\.moveWorkbenchPanel/);
     assert.match(workbenchStylesSource, /\.workbench-panel-toolbar\s*\{/);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-5.4:VAL-1, story-5.4:AC-1, and story-5.4:AC-2 workbench panels keep independent conversation history while follow-up submit stays on the same task and conversation', async () => {
+  const temp = createTempDatabase();
+
+  try {
+    const idFactory = createDeterministicIdFactory();
+    const service = createDesktopIpcService({
+      chatHistoryService: createPersistentChatHistoryService({
+        dbPath: temp.dbPath,
+        now: createSequenceNow(
+          '2026-06-08T04:00:00.000Z',
+          '2026-06-08T04:01:00.000Z',
+          '2026-06-08T04:05:00.000Z',
+          '2026-06-08T04:06:00.000Z',
+        ),
+        createId: idFactory,
+      }),
+      workbenchService: createPersistentWorkbenchService({
+        dbPath: temp.dbPath,
+        now: createSequenceNow(
+          '2026-06-08T04:02:00.000Z',
+          '2026-06-08T04:03:00.000Z',
+          '2026-06-08T04:04:00.000Z',
+          '2026-06-08T04:07:00.000Z',
+        ),
+        createId: idFactory,
+      }),
+    });
+
+    const firstTask = await service.commands.submitPrompt({
+      promptKo: '첫 번째 패널에서 이어갈 사업 제안서를 만들어줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+    });
+    const secondTask = await service.commands.submitPrompt({
+      promptKo: '두 번째 패널에서 이어갈 리서치 요약을 만들어줘.',
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'long_context',
+    });
+
+    await service.commands.openInWorkbench({
+      taskId: firstTask.taskId,
+    });
+    await service.commands.openInWorkbench({
+      taskId: secondTask.taskId,
+    });
+    await markRunCompleted(temp.dbPath, firstTask.runId, '2026-06-08T04:04:30.000Z');
+    await markRunCompleted(temp.dbPath, secondTask.runId, '2026-06-08T04:04:31.000Z');
+
+    const initialLayout = await service.queries.getWorkbenchLayout({});
+    const firstPanelConversationId =
+      initialLayout.panels.find((panel) => panel.slot === 'north-west')?.conversation?.conversationId ??
+      null;
+    const secondPanelConversationId =
+      initialLayout.panels.find((panel) => panel.slot === 'north-east')?.conversation?.conversationId ??
+      null;
+
+    assert.equal(firstPanelConversationId, firstTask.conversationId);
+    assert.equal(secondPanelConversationId, secondTask.conversationId);
+
+    await service.commands.submitPrompt({
+      promptKo: '첫 번째 작업에 숫자 근거를 더 붙여줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+      conversationId: firstTask.conversationId,
+    });
+    await service.commands.submitPrompt({
+      promptKo: '두 번째 작업은 경쟁사 비교를 한 문단 더 추가해줘.',
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'long_context',
+      conversationId: secondTask.conversationId,
+    });
+
+    const updatedLayout = await service.queries.getWorkbenchLayout({});
+    const firstPanel = updatedLayout.panels.find((panel) => panel.slot === 'north-west');
+    const secondPanel = updatedLayout.panels.find((panel) => panel.slot === 'north-east');
+
+    assert.equal(firstPanel?.conversation?.conversationId, firstTask.conversationId);
+    assert.equal(secondPanel?.conversation?.conversationId, secondTask.conversationId);
+    assert.equal(firstPanel?.conversation?.messages.length, 2);
+    assert.equal(secondPanel?.conversation?.messages.length, 2);
+    assert.equal(
+      firstPanel?.conversation?.messages.at(-1)?.contentKo,
+      '첫 번째 작업에 숫자 근거를 더 붙여줘.',
+    );
+    assert.equal(
+      secondPanel?.conversation?.messages.at(-1)?.contentKo,
+      '두 번째 작업은 경쟁사 비교를 한 문단 더 추가해줘.',
+    );
+    assert.equal(firstPanel?.conversation?.runs.at(-1)?.status, 'queued');
+    assert.equal(secondPanel?.conversation?.runs.at(-1)?.status, 'queued');
+    assert.notEqual(
+      firstPanel?.conversation?.runs.at(-1)?.sourceMessageId,
+      secondPanel?.conversation?.runs.at(-1)?.sourceMessageId,
+    );
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test('story-5.4:VAL-2 and story-5.4:AC-3 reducer keeps panel drafts, pending state, and errors isolated per slot', () => {
+  let state = createWorkbenchComposerState();
+
+  state = workbenchComposerReducer(state, {
+    type: 'draft_changed',
+    slot: 'north-west',
+    draft: 'A 패널 추가 지시',
+  });
+  state = workbenchComposerReducer(state, {
+    type: 'draft_changed',
+    slot: 'north-east',
+    draft: 'B 패널 추가 지시',
+  });
+  state = workbenchComposerReducer(state, {
+    type: 'submit_started',
+    slot: 'north-east',
+  });
+  state = workbenchComposerReducer(state, {
+    type: 'submit_failed',
+    slot: 'north-west',
+    message: 'A 패널 저장 실패',
+  });
+
+  assert.equal(state['north-west'].draft, 'A 패널 추가 지시');
+  assert.equal(state['north-west'].submitState.status, 'error');
+  assert.equal(state['north-west'].submitState.message, 'A 패널 저장 실패');
+  assert.equal(state['north-east'].draft, 'B 패널 추가 지시');
+  assert.equal(state['north-east'].submitState.status, 'submitting');
+  assert.equal(
+    mergeWorkbenchPanelMessages(
+      [
+        {
+          messageId: 'message-201',
+          conversationId: 'conversation-201',
+          runId: 'run-201',
+          role: 'user',
+          contentKo: '기존 요청',
+          createdAt: '2026-06-08T04:10:00.000Z',
+        },
+      ],
+      state['north-east'].pendingSubmission,
+    ).length,
+    1,
+  );
+  assert.equal(state['south-west'].submitState.status, 'idle');
+  assert.equal(state['south-east'].draft, '');
+});
+
+test('story-5.4:VAL-3, story-5.4:AC-4, story-5.4:AC-5, and story-5.4:AC-6 workbench renders the same task history as chat and keeps feed, activity, and composer visually separated', async () => {
+  const temp = createTempDatabase();
+
+  try {
+    const idFactory = createDeterministicIdFactory();
+    const service = createDesktopIpcService({
+      chatHistoryService: createPersistentChatHistoryService({
+        dbPath: temp.dbPath,
+        now: createSequenceNow(
+          '2026-06-08T04:20:00.000Z',
+          '2026-06-08T04:21:00.000Z',
+        ),
+        createId: idFactory,
+      }),
+      workbenchService: createPersistentWorkbenchService({
+        dbPath: temp.dbPath,
+        now: createSequenceNow(
+          '2026-06-08T04:22:00.000Z',
+          '2026-06-08T04:23:00.000Z',
+        ),
+        createId: idFactory,
+      }),
+    });
+
+    const initialSubmit = await service.commands.submitPrompt({
+      promptKo: '채팅에서 시작한 작업을 작업대에서 그대로 이어갈 수 있게 해줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+    });
+    await markRunCompleted(temp.dbPath, initialSubmit.runId, '2026-06-08T04:20:30.000Z');
+
+    await service.commands.openInWorkbench({
+      taskId: initialSubmit.taskId,
+    });
+    await service.commands.submitPrompt({
+      promptKo: '같은 작업에 후속 검토 포인트도 덧붙여줘.',
+      selectedModel: 'claude-sonnet-4',
+      optimizationMode: 'quality',
+      conversationId: initialSubmit.conversationId,
+    });
+
+    const chatFeed = await service.queries.getChatFeed({
+      conversationId: initialSubmit.conversationId,
+    });
+    const layout = await service.queries.getWorkbenchLayout({});
+    const panel = layout.panels.find((candidate) => candidate.taskId === initialSubmit.taskId);
+
+    assert.deepEqual(panel?.conversation?.messages, chatFeed.messages);
+    assert.deepEqual(panel?.conversation?.runs, chatFeed.runs);
+    assert.equal(panel?.conversation?.activeRun?.runId, chatFeed.activeRun?.runId ?? null);
+    assert.match(workbenchRouteSource, /desktopClient\.commands\.submitPrompt/);
+    assert.match(workbenchRouteSource, /conversationId: panel\.conversation\.conversationId/);
+    assert.match(workbenchRouteSource, /className="workbench-panel-feed"/);
+    assert.match(workbenchRouteSource, /className="workbench-panel-activity"/);
+    assert.match(workbenchRouteSource, /className="workbench-panel-compose"/);
+    assert.match(
+      workbenchStylesSource,
+      /\.workbench-panel-feed,\s*\.workbench-panel-activity,\s*\.workbench-panel-compose\s*\{/,
+    );
+    assert.match(workbenchStylesSource, /\.workbench-activity-item\s*\{/);
+    assert.match(workbenchStylesSource, /\.workbench-panel-compose\s*\{/);
   } finally {
     temp.cleanup();
   }

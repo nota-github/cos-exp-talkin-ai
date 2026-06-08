@@ -30,6 +30,7 @@ import {
   type RunStageRecord,
   type SaveWorkbenchPanelInput,
   type TaskRecord,
+  type UpdateConversationInput,
   type UsageRecord,
   type WorkbenchLayoutDetail,
   type WorkbenchLayoutRecord,
@@ -633,6 +634,19 @@ function createScope(connection: SqliteConnection): ChatRunPersistenceScope {
         `);
 
         return mapConversationRow(firstOrNull(rows));
+      },
+
+      async update(input: UpdateConversationInput) {
+        await connection.exec(`
+          UPDATE conversations
+          SET summary = ${sqlValue(input.summary ?? null)},
+              mode = ${sqlValue(input.mode ?? null)},
+              selected_model = ${sqlValue(input.selectedModel ?? null)},
+              updated_at = ${sqlValue(input.updatedAt)}
+          WHERE id = ${sqlValue(input.conversationId)};
+        `);
+
+        return this.getById(input.conversationId);
       },
     },
 

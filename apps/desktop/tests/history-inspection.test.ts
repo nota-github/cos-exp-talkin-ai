@@ -325,7 +325,7 @@ test('story-4.4:VAL-3, story-4.4:AC-4, and story-4.4:AC-5 keep the list final-re
   assert.doesNotMatch(historySurfaceSource, /debug log/i);
   assert.doesNotMatch(historySurfaceSource, /provider debug/i);
   assert.match(queryClientSource, /historyFeed:\s*'getHistoryFeed'/);
-  assert.match(queryClientSource, /run:\s*\['getHistoryFeed', 'getHistoryEntry'\]/);
+  assert.match(queryClientSource, /run:\s*\['getWorkbenchLayout', 'getHistoryFeed', 'getHistoryEntry'\]/);
   assert.match(stylesSource, /\.usage-history-layout\s*\{/);
   assert.match(stylesSource, /\.usage-history-row-active\s*\{/);
   assert.match(stylesSource, /\.usage-history-artifact-card-advanced\s*\{/);

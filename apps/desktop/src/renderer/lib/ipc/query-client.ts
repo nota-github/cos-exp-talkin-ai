@@ -125,8 +125,8 @@ function matchesEntityTarget<TName extends DesktopQueryName>(
 ): boolean {
   const entityDependencies: Record<EntityInvalidationTarget['entity'], DesktopQueryName[]> = {
     task: ['getChatFeed', 'getWorkbenchLayout', 'getBoardColumns', 'getProjectDetail'],
-    conversation: ['getChatFeed'],
-    run: ['getHistoryFeed', 'getHistoryEntry'],
+    conversation: ['getChatFeed', 'getWorkbenchLayout'],
+    run: ['getWorkbenchLayout', 'getHistoryFeed', 'getHistoryEntry'],
     settings: ['getSettings'],
   };
 
