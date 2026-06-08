@@ -7,18 +7,21 @@ import {
 } from '../lib/ipc/query-client';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
 import {
+  closeWorkbenchPanelInPreview,
   getWorkbenchSurfaceState,
   getWorkbenchStatusLabel,
+  moveWorkbenchPanelInPreview,
   placeWorkbenchTaskInPreview,
   previewWorkbenchLayout,
+  workbenchSlotLabels,
   workbenchSurfaceCopy,
 } from './workbench-surface';
 
-const slotLabels: Record<PanelSlot, string> = {
-  'north-west': 'Panel A',
-  'north-east': 'Panel B',
-  'south-west': 'Panel C',
-  'south-east': 'Panel D',
+const slotShortLabels: Record<PanelSlot, string> = {
+  'north-west': 'A',
+  'north-east': 'B',
+  'south-west': 'C',
+  'south-east': 'D',
 };
 
 export function WorkbenchRoute() {
@@ -35,6 +38,7 @@ export function WorkbenchRoute() {
     desktopClient.available ? null : previewWorkbenchLayout.activePanelSlot,
   );
   const [placementError, setPlacementError] = useState<string | null>(null);
+  const [pendingPanelAction, setPendingPanelAction] = useState<string | null>(null);
   const surfaceState = getWorkbenchSurfaceState({
     desktopAvailable: desktopClient.available,
     queryStatus: workbenchLayoutQuery.status,
@@ -44,7 +48,7 @@ export function WorkbenchRoute() {
   });
 
   useEffect(() => {
-    if (!surfaceState.layout?.activePanelSlot) {
+    if (!surfaceState.layout) {
       return;
     }
 
@@ -65,7 +69,64 @@ export function WorkbenchRoute() {
       const result = await desktopClient.commands.openInWorkbench({ taskId });
       setActivePanelSlot(result.panelSlot);
     } catch (error) {
-      setPlacementError(error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody);
+      setPlacementError(
+        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
+      );
+    }
+  }
+
+  async function handlePanelMove(fromPanelSlot: PanelSlot, toPanelSlot: PanelSlot) {
+    setPlacementError(null);
+    setPendingPanelAction(`move:${fromPanelSlot}:${toPanelSlot}`);
+
+    try {
+      if (!desktopClient.available) {
+        const nextLayout = moveWorkbenchPanelInPreview(
+          previewLayout,
+          fromPanelSlot,
+          toPanelSlot,
+        );
+        setPreviewLayout(nextLayout);
+        setActivePanelSlot(nextLayout.activePanelSlot);
+        return;
+      }
+
+      const result = await desktopClient.commands.moveWorkbenchPanel({
+        fromPanelSlot,
+        toPanelSlot,
+      });
+      setActivePanelSlot(result.panelSlot);
+    } catch (error) {
+      setPlacementError(
+        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
+      );
+    } finally {
+      setPendingPanelAction(null);
+    }
+  }
+
+  async function handlePanelClose(panelSlot: PanelSlot) {
+    setPlacementError(null);
+    setPendingPanelAction(`close:${panelSlot}`);
+
+    try {
+      if (!desktopClient.available) {
+        const nextLayout = closeWorkbenchPanelInPreview(previewLayout, panelSlot);
+        setPreviewLayout(nextLayout);
+        setActivePanelSlot(nextLayout.activePanelSlot);
+        return;
+      }
+
+      const result = await desktopClient.commands.closeWorkbenchPanel({
+        panelSlot,
+      });
+      setActivePanelSlot(result.activePanelSlot);
+    } catch (error) {
+      setPlacementError(
+        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
+      );
+    } finally {
+      setPendingPanelAction(null);
     }
   }
 
@@ -87,9 +148,7 @@ export function WorkbenchRoute() {
               <h3>{workbenchSurfaceCopy.railTitle}</h3>
               <p>{workbenchSurfaceCopy.railDescription}</p>
             </div>
-            <span className="badge badge-muted">
-              {surfaceState.railCountLabel}
-            </span>
+            <span className="badge badge-muted">{surfaceState.railCountLabel}</span>
           </div>
 
           {surfaceState.showLoadingState ? (
@@ -113,6 +172,14 @@ export function WorkbenchRoute() {
 
           {surfaceState.showInteractiveContent ? (
             <div className="task-rail">
+              {surfaceState.recentTasks.length === 0 ? (
+                <article className="workbench-state-card">
+                  <span className="panel-kicker">Empty</span>
+                  <strong>{workbenchSurfaceCopy.railEmptyTitle}</strong>
+                  <p>{workbenchSurfaceCopy.railEmptyBody}</p>
+                </article>
+              ) : null}
+
               {surfaceState.recentTasks.map((task) => {
                 const isTaskActive =
                   task.panelSlot !== null && task.panelSlot === surfaceState.activePanelSlot;
@@ -196,7 +263,7 @@ export function WorkbenchRoute() {
                   >
                     <div className="panel-header">
                       <div>
-                        <span className="panel-kicker">{slotLabels[panel.slot]}</span>
+                        <span className="panel-kicker">{workbenchSlotLabels[panel.slot]}</span>
                         <h3>{panel.title}</h3>
                       </div>
                       <span className={isActive ? 'badge badge-primary' : 'badge badge-muted'}>
@@ -207,18 +274,74 @@ export function WorkbenchRoute() {
                     <p>{panel.note}</p>
 
                     {taskSummary ? (
-                      <div className="workbench-panel-meta">
-                        <span>{taskSummary.projectName}</span>
-                        <span>{taskSummary.toolSummary}</span>
-                        <span>
-                          {taskSummary.lastActivity} · 예상 {taskSummary.savingsRate}% 절감
-                        </span>
-                      </div>
+                      <>
+                        <div className="workbench-panel-meta">
+                          <span>{taskSummary.projectName}</span>
+                          <span>{taskSummary.toolSummary}</span>
+                          <span>
+                            {taskSummary.lastActivity} · 예상 {taskSummary.savingsRate}% 절감
+                          </span>
+                        </div>
+
+                        <div className="workbench-panel-toolbar">
+                          <span className="panel-kicker">Panel Actions</span>
+                          <div className="toolbar-group workbench-panel-actions">
+                            {Object.entries(workbenchSlotLabels).map(([slot, label]) => {
+                              const targetSlot = slot as PanelSlot;
+                              const isCurrentSlot = targetSlot === panel.slot;
+                              const isPendingMove =
+                                pendingPanelAction === `move:${panel.slot}:${targetSlot}`;
+
+                              return (
+                                <button
+                                  key={targetSlot}
+                                  type="button"
+                                  className="ghost-chip"
+                                  disabled={isCurrentSlot || pendingPanelAction !== null}
+                                  aria-pressed={isCurrentSlot}
+                                  onClick={() => {
+                                    void handlePanelMove(panel.slot, targetSlot);
+                                  }}
+                                >
+                                  {isPendingMove
+                                    ? `${slotShortLabels[targetSlot]} 이동 중`
+                                    : label}
+                                </button>
+                              );
+                            })}
+
+                            <button
+                              type="button"
+                              className="ghost-chip workbench-panel-close"
+                              disabled={pendingPanelAction !== null}
+                              onClick={() => {
+                                void handlePanelClose(panel.slot);
+                              }}
+                            >
+                              {pendingPanelAction === `close:${panel.slot}` ? '비우는 중' : '비우기'}
+                            </button>
+                          </div>
+                        </div>
+                      </>
                     ) : (
-                      <div className="workbench-panel-meta workbench-panel-empty-meta">
-                        <span>작업을 끌어오세요</span>
-                        <span>또는 채팅에서 바로 이어 열기</span>
-                      </div>
+                      <>
+                        <div className="workbench-panel-meta workbench-panel-empty-meta">
+                          <span>작업을 끌어오세요</span>
+                          <span>또는 새 채팅을 열어 병렬 작업을 시작하세요</span>
+                        </div>
+
+                        <div className="workbench-panel-toolbar">
+                          <span className="panel-kicker">Empty Slot</span>
+                          <div className="toolbar-group workbench-panel-actions">
+                            <button type="button" className="ghost-chip" disabled>
+                              최근 작업 대기
+                            </button>
+                            <button type="button" className="ghost-chip" disabled>
+                              새 채팅은 채팅 화면에서 시작
+                            </button>
+                          </div>
+                        </div>
+                      </>
                     )}
                   </article>
                 );

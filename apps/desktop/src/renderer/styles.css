@@ -289,6 +289,13 @@ button {
   cursor: pointer;
 }
 
+.ghost-chip:disabled,
+.soft-button:disabled,
+.toolbar-group button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
 .toolbar-group button[aria-pressed="true"] {
   border-color: rgba(20, 80, 189, 0.22);
   background: linear-gradient(180deg, rgba(34, 118, 245, 0.12) 0%, rgba(55, 201, 171, 0.1) 100%);
@@ -856,6 +863,22 @@ button {
 .workbench-panel-empty-meta {
   border: 1px dashed rgba(20, 80, 189, 0.16);
   background: rgba(255, 255, 255, 0.7);
+}
+
+.workbench-panel-toolbar {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.workbench-panel-actions {
+  align-items: center;
+}
+
+.workbench-panel-close {
+  border-color: rgba(15, 39, 68, 0.14);
+  background: rgba(15, 39, 68, 0.04);
 }
 
 .detail-grid {
