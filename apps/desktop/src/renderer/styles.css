@@ -302,6 +302,18 @@ button {
   color: var(--blue-deep);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .chat-layout,
 .chat-inbox-shell,
 .two-column-layout,
@@ -765,6 +777,27 @@ button {
   margin: 6px 0 0;
 }
 
+.project-file-section-copy,
+.project-file-policy {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.project-file-toolbar,
+.project-file-card-top,
+.project-file-action-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.project-file-toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .project-detail-search {
   display: grid;
   gap: 8px;
@@ -831,6 +864,18 @@ button {
   border-radius: 22px;
   border: 1px dashed rgba(20, 80, 189, 0.18);
   background: rgba(255, 255, 255, 0.74);
+}
+
+.project-file-action-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.project-file-action-row span {
+  flex: 1 1 220px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 .project-context-card {
@@ -2139,6 +2184,9 @@ button {
   .project-detail-task-meta,
   .project-detail-task-actions,
   .project-detail-header-badges,
+  .project-file-toolbar,
+  .project-file-card-top,
+  .project-file-action-row,
   .project-context-top,
   .project-context-actions,
   .project-file-meta,

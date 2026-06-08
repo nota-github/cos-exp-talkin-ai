@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { BoardTaskCard, ProjectDetailResult, TaskStatus } from '../../shared/ipc/contracts';
 import {
@@ -113,11 +113,14 @@ export function ProjectsRoute() {
   const [projectTaskSearch, setProjectTaskSearch] = useState('');
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [pendingTaskIds, setPendingTaskIds] = useState<Record<string, boolean>>({});
+  const [pendingFileIds, setPendingFileIds] = useState<Record<string, boolean>>({});
   const [taskErrors, setTaskErrors] = useState<Record<string, string | null>>({});
   const [notice, setNotice] = useState<{
     tone: 'success' | 'error';
     message: string;
   } | null>(null);
+  const [isAttachingFile, setIsAttachingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const resolvedSelectedProjectId =
     selectedProjectId ?? projectHubState.projects[0]?.projectId ?? null;
@@ -259,6 +262,79 @@ export function ProjectsRoute() {
     setNotice(null);
   }
 
+  function handleStartAttachFile() {
+    if (!desktopClient.available || !resolvedSelectedProjectId || isAttachingFile) {
+      return;
+    }
+
+    fileInputRef.current?.click();
+  }
+
+  async function handleAttachFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFile = event.target.files?.[0] ?? null;
+    event.target.value = '';
+
+    if (!selectedFile || !desktopClient.available || !resolvedSelectedProjectId) {
+      return;
+    }
+
+    setIsAttachingFile(true);
+
+    try {
+      await desktopClient.commands.attachProjectFile({
+        projectId: resolvedSelectedProjectId,
+        file: {
+          displayName: selectedFile.name,
+          mimeType: selectedFile.type || 'application/octet-stream',
+          bytes: new Uint8Array(await selectedFile.arrayBuffer()),
+        },
+      });
+      setNotice({
+        tone: 'success',
+        message: `${selectedFile.name} 파일을 연결했습니다. 원본 로컬 파일은 그대로 두고 앱 보관본만 프로젝트에 추가했습니다.`,
+      });
+    } catch {
+      setNotice({
+        tone: 'error',
+        message: '파일을 연결하지 못했습니다. 원본 파일은 그대로 있으니 잠시 후 다시 시도해 주세요.',
+      });
+    } finally {
+      setIsAttachingFile(false);
+    }
+  }
+
+  async function handleUnlinkProjectFile(fileId: string, displayName: string) {
+    if (!desktopClient.available || !resolvedSelectedProjectId) {
+      return;
+    }
+
+    setPendingFileIds((current) => ({
+      ...current,
+      [fileId]: true,
+    }));
+
+    try {
+      await desktopClient.commands.unlinkProjectFile({
+        projectId: resolvedSelectedProjectId,
+        fileId,
+      });
+      setNotice({
+        tone: 'success',
+        message: `${displayName} 연결을 해제했습니다. 원본 로컬 파일은 삭제하지 않았습니다.`,
+      });
+    } catch {
+      setNotice({
+        tone: 'error',
+        message: '파일 연결 해제를 저장하지 못했습니다. 원본 파일은 그대로 있고, 프로젝트 상태도 유지됩니다.',
+      });
+    } finally {
+      setPendingFileIds((current) => ({
+        ...current,
+        [fileId]: false,
+      }));
+    }
+  }
+
   function handleStartCreateProject() {
     setActiveView('hub');
     setIsCreatingProject(true);
@@ -377,6 +453,7 @@ export function ProjectsRoute() {
   const linkedTasks = selectedProjectDetail?.tasks ?? [];
   const filteredLinkedTasks = filterProjectTasks(linkedTasks, projectTaskSearch);
   const recentProjectActivity = selectedProjectDetail?.recentActivity ?? [];
+  const selectedProjectFiles = selectedProjectDetail?.files ?? [];
   const recentTasks = projectHubState.recentTasks.filter(
     (task) => task.projectId !== resolvedSelectedProjectId,
   );
@@ -391,6 +468,17 @@ export function ProjectsRoute() {
     !isCreatingProject &&
     resolvedSelectedProjectId !== null &&
     projectDetailQuery.status === 'error';
+  const canManageProjectFiles =
+    desktopClient.available &&
+    !isCreatingProject &&
+    resolvedSelectedProjectId !== null &&
+    !showProjectDetailLoading &&
+    !showProjectDetailError;
+  const fileAttachButtonLabel = isAttachingFile
+    ? '파일 연결 중...'
+    : selectedProjectFiles.length > 0
+      ? '파일 추가'
+      : '파일 연결';
 
   return (
     <section className="screen screen-projects">
@@ -751,6 +839,16 @@ export function ProjectsRoute() {
               !isCreatingProject &&
               selectedProjectDetail ? (
                 <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="visually-hidden"
+                    tabIndex={-1}
+                    onChange={(event) => {
+                      void handleAttachFileSelection(event);
+                    }}
+                  />
+
                   <article className="project-detail-hero">
                     <div className="project-detail-hero-copy">
                       <span className="panel-kicker">허브 브리프</span>
@@ -862,18 +960,43 @@ export function ProjectsRoute() {
                           <div>
                             <span className="panel-kicker">참고 파일</span>
                             <h4>프로젝트와 함께 보는 문서</h4>
+                            <p className="project-file-section-copy">
+                              문서 관리 화면처럼 확장하지 않고, 지금 작업에 필요한 참고 자료만 가볍게 연결합니다.
+                            </p>
                           </div>
-                          <span className="badge badge-muted">{selectedProjectDetail.files.length}개</span>
+                          <div className="project-file-toolbar">
+                            <span className="badge badge-muted">{selectedProjectFiles.length}개</span>
+                            <button
+                              type="button"
+                              className="soft-button"
+                              disabled={!canManageProjectFiles || isAttachingFile}
+                              onClick={handleStartAttachFile}
+                            >
+                              {fileAttachButtonLabel}
+                            </button>
+                          </div>
                         </div>
 
-                        {selectedProjectDetail.files.length > 0 ? (
+                        {selectedProjectFiles.length > 0 ? (
                           <div className="project-file-list">
-                            {selectedProjectDetail.files.map((file) => (
+                            {selectedProjectFiles.map((file) => (
                               <article
                                 key={file.fileId}
                                 className="project-file-card"
                               >
-                                <strong>{file.displayName}</strong>
+                                <div className="project-file-card-top">
+                                  <strong>{file.displayName}</strong>
+                                  <button
+                                    type="button"
+                                    className="soft-button"
+                                    disabled={!canManageProjectFiles || pendingFileIds[file.fileId] === true}
+                                    onClick={() => {
+                                      void handleUnlinkProjectFile(file.fileId, file.displayName);
+                                    }}
+                                  >
+                                    {pendingFileIds[file.fileId] === true ? '해제 중...' : '연결 해제'}
+                                  </button>
+                                </div>
                                 <div className="project-file-meta">
                                   <span>{file.mimeType}</span>
                                   <span>{formatProjectFileSize(file.sizeBytes)}</span>
@@ -885,9 +1008,30 @@ export function ProjectsRoute() {
                           <article className="project-file-empty">
                             <span className="panel-kicker">아직 없음</span>
                             <strong>첫 참고 파일이 아직 없습니다</strong>
-                            <p>파일 연결 기능이 준비되면 이 영역에 문서가 모입니다. 지금은 관련 task를 먼저 연결해 작업 맥락을 쌓아 두세요.</p>
+                            <p>필요한 문서 한두 개만 먼저 연결해 두면, 이 프로젝트 안에서 다시 참고할 맥락이 바로 모입니다.</p>
+                            <div className="project-file-action-row">
+                              <button
+                                type="button"
+                                className="primary-button"
+                                disabled={!canManageProjectFiles || isAttachingFile}
+                                onClick={handleStartAttachFile}
+                              >
+                                {isAttachingFile ? '파일 연결 중...' : '첫 파일 연결'}
+                              </button>
+                              <span>
+                                {desktopClient.available
+                                  ? '원본 로컬 파일은 삭제하지 않고, 앱 보관본만 이 프로젝트에 연결합니다.'
+                                  : '미리보기에서는 파일 연결을 실행하지 않습니다.'}
+                              </span>
+                            </div>
                           </article>
                         )}
+
+                        {selectedProjectFiles.length > 0 ? (
+                          <p className="project-file-policy">
+                            원본 로컬 파일은 그대로 두고 앱 보관본만 연결합니다. 연결 해제는 프로젝트 목록에서만 제거되며, 원본 파일은 삭제하지 않습니다.
+                          </p>
+                        ) : null}
                       </section>
 
                       <section className="project-detail-section">

@@ -4,6 +4,8 @@ export const commandNames = [
   'createProject',
   'updateProject',
   'setTaskProject',
+  'attachProjectFile',
+  'unlinkProjectFile',
   'openInWorkbench',
   'moveWorkbenchPanel',
   'closeWorkbenchPanel',
@@ -39,6 +41,8 @@ export const ipcChannels: {
     createProject: 'talkin-ai:command:createProject',
     updateProject: 'talkin-ai:command:updateProject',
     setTaskProject: 'talkin-ai:command:setTaskProject',
+    attachProjectFile: 'talkin-ai:command:attachProjectFile',
+    unlinkProjectFile: 'talkin-ai:command:unlinkProjectFile',
     openInWorkbench: 'talkin-ai:command:openInWorkbench',
     moveWorkbenchPanel: 'talkin-ai:command:moveWorkbenchPanel',
     closeWorkbenchPanel: 'talkin-ai:command:closeWorkbenchPanel',
@@ -465,6 +469,39 @@ export type SetTaskProjectResult = {
   previousProjectId: string | null;
 };
 
+export type ProjectFileUpload = {
+  displayName: string;
+  mimeType: string;
+  bytes: Uint8Array;
+};
+
+export type AttachProjectFileCommand = {
+  projectId: string;
+  file: ProjectFileUpload;
+};
+
+export type AttachProjectFileResult = {
+  projectId: string;
+  fileId: string;
+  displayName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+};
+
+export type UnlinkProjectFileCommand = {
+  projectId: string;
+  fileId: string;
+};
+
+export type UnlinkProjectFileResult = {
+  projectId: string;
+  fileId: string;
+  storagePath: string;
+  originalFileDeleted: false;
+  managedCopyRetained: true;
+};
+
 export type OpenInWorkbenchCommand = {
   taskId: string;
   panelSlot?: PanelSlot;
@@ -537,6 +574,14 @@ export type DesktopCommandDefinitions = {
   setTaskProject: {
     request: SetTaskProjectCommand;
     response: SetTaskProjectResult;
+  };
+  attachProjectFile: {
+    request: AttachProjectFileCommand;
+    response: AttachProjectFileResult;
+  };
+  unlinkProjectFile: {
+    request: UnlinkProjectFileCommand;
+    response: UnlinkProjectFileResult;
   };
   openInWorkbench: {
     request: OpenInWorkbenchCommand;

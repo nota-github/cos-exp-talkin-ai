@@ -1,4 +1,5 @@
 import {
+  type AttachProjectFileResult,
   commandNames,
   ipcChannels,
   queryNames,
@@ -23,6 +24,7 @@ import {
   type ProjectTaskSummary,
   type SetTaskProjectResult,
   type TaskStatus,
+  type UnlinkProjectFileResult,
   type UpdateProjectResult,
   type UsageDashboardResult,
   type WorkbenchPanel,
@@ -1012,6 +1014,46 @@ function stageSetTaskProjectInState(
   draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
 }
 
+function stageAttachedProjectFileInState(
+  draftState: DesktopIpcState,
+  result: AttachProjectFileResult,
+  updatedAt: string,
+) {
+  const project = draftState.projects[result.projectId];
+
+  if (!project) {
+    return;
+  }
+
+  project.updatedAt = updatedAt;
+  project.files = [
+    ...project.files,
+    {
+      fileId: result.fileId,
+      displayName: result.displayName,
+      mimeType: result.mimeType,
+      sizeBytes: result.sizeBytes,
+    },
+  ].sort((left, right) =>
+    left.displayName.localeCompare(right.displayName) || left.fileId.localeCompare(right.fileId),
+  );
+}
+
+function stageUnlinkedProjectFileInState(
+  draftState: DesktopIpcState,
+  result: UnlinkProjectFileResult,
+  updatedAt: string,
+) {
+  const project = draftState.projects[result.projectId];
+
+  if (!project) {
+    return;
+  }
+
+  project.updatedAt = updatedAt;
+  project.files = project.files.filter((file) => file.fileId !== result.fileId);
+}
+
 function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardColumnsResult {
   return {
     columns: (Object.keys(boardColumnTitles) as TaskStatus[]).map((status) => ({
@@ -1550,6 +1592,121 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
                     keys: [projectId],
                   }) satisfies InvalidationTarget,
               ),
+          ],
+        };
+      }),
+    attachProjectFile: async (request) =>
+      commitCommandMutation('attachProjectFile', async (draftState) => {
+        if (!request.file.displayName.trim()) {
+          throw new Error('첨부할 파일 이름을 확인할 수 없습니다.');
+        }
+
+        const updatedAt = nowIso();
+
+        if (projectService) {
+          return {
+            commit: async () => {
+              const result = await projectService.attachProjectFile(request);
+              stageAttachedProjectFileInState(draftState, result, updatedAt);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'projection',
+                projection: 'projectList',
+              },
+              {
+                kind: 'projection',
+                projection: 'projectDetail',
+                keys: [request.projectId],
+              },
+            ],
+          };
+        }
+
+        const project = ensureProject(draftState, request.projectId);
+        const result = {
+          projectId: request.projectId,
+          fileId: `file-${String(project.files.length + 1).padStart(3, '0')}`,
+          displayName: request.file.displayName.trim(),
+          mimeType: request.file.mimeType.trim() || 'application/octet-stream',
+          sizeBytes: request.file.bytes.byteLength,
+          storagePath: `in-memory://${request.projectId}/${request.file.displayName.trim()}`,
+        } satisfies AttachProjectFileResult;
+
+        stageAttachedProjectFileInState(draftState, result, updatedAt);
+
+        return {
+          result,
+          targets: [
+            {
+              kind: 'projection',
+              projection: 'projectList',
+            },
+            {
+              kind: 'projection',
+              projection: 'projectDetail',
+              keys: [request.projectId],
+            },
+          ],
+        };
+      }),
+    unlinkProjectFile: async (request) =>
+      commitCommandMutation('unlinkProjectFile', async (draftState) => {
+        const updatedAt = nowIso();
+
+        if (projectService) {
+          return {
+            commit: async () => {
+              const result = await projectService.unlinkProjectFile(request);
+              stageUnlinkedProjectFileInState(draftState, result, updatedAt);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'projection',
+                projection: 'projectList',
+              },
+              {
+                kind: 'projection',
+                projection: 'projectDetail',
+                keys: [request.projectId],
+              },
+            ],
+          };
+        }
+
+        const project = ensureProject(draftState, request.projectId);
+        const file = project.files.find((candidate) => candidate.fileId === request.fileId);
+
+        if (!file) {
+          throw new Error('연결 해제할 프로젝트 파일을 찾을 수 없습니다.');
+        }
+
+        const result = {
+          projectId: request.projectId,
+          fileId: request.fileId,
+          storagePath: `in-memory://${request.projectId}/${file.displayName}`,
+          originalFileDeleted: false,
+          managedCopyRetained: true,
+        } satisfies UnlinkProjectFileResult;
+
+        stageUnlinkedProjectFileInState(draftState, result, updatedAt);
+
+        return {
+          result,
+          targets: [
+            {
+              kind: 'projection',
+              projection: 'projectList',
+            },
+            {
+              kind: 'projection',
+              projection: 'projectDetail',
+              keys: [request.projectId],
+            },
           ],
         };
       }),

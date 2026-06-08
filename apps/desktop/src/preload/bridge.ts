@@ -52,6 +52,8 @@ export function createTalkinAIDesktopApi(
         createProject: (request) => invokeCommand(ipcRenderer, 'createProject', request),
         updateProject: (request) => invokeCommand(ipcRenderer, 'updateProject', request),
         setTaskProject: (request) => invokeCommand(ipcRenderer, 'setTaskProject', request),
+        attachProjectFile: (request) => invokeCommand(ipcRenderer, 'attachProjectFile', request),
+        unlinkProjectFile: (request) => invokeCommand(ipcRenderer, 'unlinkProjectFile', request),
         openInWorkbench: (request) => invokeCommand(ipcRenderer, 'openInWorkbench', request),
         moveWorkbenchPanel: (request) =>
           invokeCommand(ipcRenderer, 'moveWorkbenchPanel', request),
