@@ -289,6 +289,12 @@ button {
   cursor: pointer;
 }
 
+.toolbar-group button[aria-pressed="true"] {
+  border-color: rgba(20, 80, 189, 0.22);
+  background: linear-gradient(180deg, rgba(34, 118, 245, 0.12) 0%, rgba(55, 201, 171, 0.1) 100%);
+  color: var(--blue-deep);
+}
+
 .chat-layout,
 .two-column-layout,
 .workbench-layout {
@@ -339,6 +345,10 @@ button {
   border: 1px solid var(--line);
   background: var(--panel-strong);
   cursor: pointer;
+}
+
+.preview-row-static {
+  cursor: default;
 }
 
 .preview-row strong,
@@ -419,6 +429,10 @@ button {
   justify-content: space-between;
   gap: 16px;
   align-items: flex-end;
+}
+
+.composer-status {
+  margin-top: 10px;
 }
 
 .primary-button {
