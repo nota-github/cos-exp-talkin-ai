@@ -30,9 +30,7 @@ export type OptimizationDispatchInput = {
   runId: string;
   model: RunRecord['model'];
   mode: RunRecord['mode'];
-  sourceKorean: string;
   optimizedEnglish: string;
-  conversationSummary?: string;
 };
 
 export type OptimizationStageResult =
@@ -492,9 +490,7 @@ export function createPersistentOptimizationStageOrchestrator(
             runId: input.runId,
             model: claimedRun.run.model,
             mode: claimedRun.run.mode,
-            sourceKorean: claimedRun.message.contentKo,
             optimizedEnglish: optimizedPromptEn,
-            conversationSummary: claimedRun.optimizeInput.conversationSummary,
           });
         }
 
