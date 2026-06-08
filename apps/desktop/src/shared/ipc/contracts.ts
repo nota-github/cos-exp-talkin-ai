@@ -97,6 +97,15 @@ export type ChatFeedRunFailureSummary = {
   retryable: boolean | null;
 };
 
+export type ChatFeedRunUsageSummary = {
+  baselineInputTokens: number;
+  optimizedInputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  savingsRate: number;
+  isEstimated: boolean;
+};
+
 export type ChatFeedRunSummary = {
   runId: string;
   sourceMessageId: string;
@@ -121,6 +130,7 @@ export type ChatFeedRunSummary = {
   mode: OptimizationMode;
   errorCode: string | null;
   failure: ChatFeedRunFailureSummary | null;
+  usage?: ChatFeedRunUsageSummary | null;
 };
 
 export type ChatFeedQuery = {
@@ -134,6 +144,7 @@ export type ChatFeedResult = {
   recommendedPrompts: string[];
   items: ChatFeedItem[];
   messages: ChatFeedMessage[];
+  runs: ChatFeedRunSummary[];
   activeRun: ChatFeedRunSummary | null;
 };
 
