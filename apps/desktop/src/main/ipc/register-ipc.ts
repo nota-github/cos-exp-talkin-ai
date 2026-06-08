@@ -410,6 +410,7 @@ function createInitialState(): DesktopIpcState {
             : index === 1
               ? '리서치 요약 패널'
               : '작업을 끌어오거나 새 채팅을 시작하세요',
+        conversation: null,
       })),
     },
     boardColumns: {
@@ -913,6 +914,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               },
               {
                 kind: 'projection',
+                projection: 'workbenchLayout',
+              },
+              {
+                kind: 'projection',
                 projection: 'historyFeed',
               },
               {
@@ -970,14 +975,18 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               entity: 'run',
               ids: [runId],
             },
-            {
-              kind: 'projection',
-              projection: 'chatFeed',
-            },
-            {
-              kind: 'projection',
-              projection: 'historyFeed',
-            },
+          {
+            kind: 'projection',
+            projection: 'chatFeed',
+          },
+          {
+            kind: 'projection',
+            projection: 'workbenchLayout',
+          },
+          {
+            kind: 'projection',
+            projection: 'historyFeed',
+          },
             {
               kind: 'projection',
               projection: 'historyEntry',
@@ -1089,6 +1098,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         panel.title = task.title;
         panel.status = task.status;
         panel.note = `최근 활동 ${task.lastActivity} · ${task.projectName}`;
+        panel.conversation = null;
         draftState.workbenchLayout.activePanelSlot = slot;
         draftState.workbenchLayout.updatedAt = activityAt;
         draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
@@ -1151,11 +1161,13 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         sourcePanel.note = swappedTask
           ? `최근 활동 ${swappedTask.lastActivity} · ${swappedTask.projectName}`
           : '작업을 끌어오거나 새 채팅을 시작하세요';
+        sourcePanel.conversation = null;
 
         targetPanel.taskId = movedTask.taskId;
         targetPanel.title = movedTask.title;
         targetPanel.status = movedTask.status;
         targetPanel.note = `최근 활동 ${movedTask.lastActivity} · ${movedTask.projectName}`;
+        targetPanel.conversation = null;
         draftState.workbenchLayout.activePanelSlot = request.toPanelSlot;
         draftState.workbenchLayout.updatedAt = nowIso();
 
@@ -1201,6 +1213,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
         panel.title = '새 작업을 열어보세요';
         panel.status = 'idle';
         panel.note = '작업을 끌어오거나 새 채팅을 시작하세요';
+        panel.conversation = null;
         draftState.workbenchLayout.activePanelSlot = getInMemoryNextActiveWorkbenchSlot(
           draftState.workbenchLayout.panels,
         );

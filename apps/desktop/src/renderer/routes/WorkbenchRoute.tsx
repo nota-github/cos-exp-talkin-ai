@@ -1,20 +1,27 @@
-import { useEffect, useState } from 'react';
-import type { PanelSlot } from '../../shared/ipc/contracts';
+import { useEffect, useReducer, useState } from 'react';
+import type { ChatFeedRunSummary, PanelSlot } from '../../shared/ipc/contracts';
 import {
   createDesktopQueryDescriptor,
   getDesktopQueryCache,
   getRendererDesktopClient,
 } from '../lib/ipc/query-client';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
+import { getChatResponseMetadata, getChatRunFeedback } from './chat-surface';
 import {
   closeWorkbenchPanelInPreview,
-  getWorkbenchSurfaceState,
+  createWorkbenchComposerState,
+  getLatestWorkbenchPanelRun,
+  getWorkbenchPanelActivityItems,
   getWorkbenchStatusLabel,
+  hasInFlightWorkbenchRun,
+  mergeWorkbenchPanelMessages,
   moveWorkbenchPanelInPreview,
   placeWorkbenchTaskInPreview,
   previewWorkbenchLayout,
+  workbenchComposerReducer,
   workbenchSlotLabels,
   workbenchSurfaceCopy,
+  getWorkbenchSurfaceState,
 } from './workbench-surface';
 
 const slotShortLabels: Record<PanelSlot, string> = {
@@ -23,6 +30,29 @@ const slotShortLabels: Record<PanelSlot, string> = {
   'south-west': 'C',
   'south-east': 'D',
 };
+
+function getPanelRunBadgeLabel(run: ChatFeedRunSummary | null) {
+  if (!run) {
+    return null;
+  }
+
+  switch (run.status) {
+    case 'queued':
+      return '실행 대기';
+    case 'optimizing':
+      return '로컬 최적화';
+    case 'optimized':
+      return '영문 프롬프트 준비';
+    case 'cloud_pending':
+      return '모델 응답 대기';
+    case 'restoring':
+      return '한국어 복원';
+    case 'completed':
+      return '응답 저장 완료';
+    case 'failed':
+      return '실행 실패';
+  }
+}
 
 export function WorkbenchRoute() {
   const desktopClient = getRendererDesktopClient();
@@ -39,6 +69,11 @@ export function WorkbenchRoute() {
   );
   const [placementError, setPlacementError] = useState<string | null>(null);
   const [pendingPanelAction, setPendingPanelAction] = useState<string | null>(null);
+  const [composerState, dispatchComposerAction] = useReducer(
+    workbenchComposerReducer,
+    undefined,
+    createWorkbenchComposerState,
+  );
   const surfaceState = getWorkbenchSurfaceState({
     desktopAvailable: desktopClient.available,
     queryStatus: workbenchLayoutQuery.status,
@@ -46,6 +81,9 @@ export function WorkbenchRoute() {
     previewLayout,
     activePanelSlot,
   });
+  const shouldPollActiveRun = surfaceState.panels.some((panel) =>
+    hasInFlightWorkbenchRun(getLatestWorkbenchPanelRun(panel)),
+  );
 
   useEffect(() => {
     if (!surfaceState.layout) {
@@ -54,6 +92,48 @@ export function WorkbenchRoute() {
 
     setActivePanelSlot(surfaceState.layout.activePanelSlot);
   }, [surfaceState.layout?.activePanelSlot, surfaceState.layout?.updatedAt]);
+
+  useEffect(() => {
+    if (!desktopClient.available || !shouldPollActiveRun) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void queryCache.fetchQuery(workbenchLayoutDescriptor).catch(() => undefined);
+    }, 900);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [desktopClient.available, queryCache, shouldPollActiveRun, workbenchLayoutDescriptor.key]);
+
+  useEffect(() => {
+    const slotsToCommit = surfaceState.panels.flatMap((panel) => {
+      const pendingSubmission = composerState[panel.slot].pendingSubmission;
+
+      if (
+        pendingSubmission &&
+        panel.conversation?.messages.some(
+          (message) => message.messageId === pendingSubmission.messageId,
+        )
+      ) {
+        return [panel.slot];
+      }
+
+      return [];
+    });
+
+    if (slotsToCommit.length === 0) {
+      return;
+    }
+
+    for (const slot of slotsToCommit) {
+      dispatchComposerAction({
+        type: 'pending_submission_committed',
+        slot,
+      });
+    }
+  }, [composerState, surfaceState.panels]);
 
   async function handleRecentTaskSelect(taskId: string) {
     setPlacementError(null);
@@ -127,6 +207,56 @@ export function WorkbenchRoute() {
       );
     } finally {
       setPendingPanelAction(null);
+    }
+  }
+
+  async function handlePanelSubmit(panelSlot: PanelSlot) {
+    const panel = surfaceState.panels.find((candidate) => candidate.slot === panelSlot);
+    const currentComposerState = composerState[panelSlot];
+    const promptKo = currentComposerState.draft.trim();
+
+    if (!desktopClient.available || !panel?.conversation || promptKo.length === 0) {
+      return;
+    }
+
+    const latestRun = getLatestWorkbenchPanelRun(panel);
+
+    dispatchComposerAction({
+      type: 'submit_started',
+      slot: panelSlot,
+    });
+    setPlacementError(null);
+    setActivePanelSlot(panelSlot);
+
+    try {
+      const result = await desktopClient.commands.submitPrompt({
+        promptKo,
+        selectedModel: latestRun?.model ?? 'gpt-4.1',
+        optimizationMode: latestRun?.mode ?? 'balanced',
+        conversationId: panel.conversation.conversationId,
+      });
+      dispatchComposerAction({
+        type: 'submit_succeeded',
+        slot: panelSlot,
+        pendingSubmission: {
+          messageId: result.messageId,
+          conversationId: result.conversationId,
+          runId: result.runId,
+          role: 'user',
+          contentKo: promptKo,
+          createdAt: new Date().toISOString(),
+        },
+      });
+      await queryCache.fetchQuery(workbenchLayoutDescriptor);
+    } catch (error) {
+      dispatchComposerAction({
+        type: 'submit_failed',
+        slot: panelSlot,
+        message:
+          error instanceof Error
+            ? error.message
+            : workbenchSurfaceCopy.panelSubmitErrorMessage,
+      });
     }
   }
 
@@ -255,23 +385,56 @@ export function WorkbenchRoute() {
                   panel.taskId !== null
                     ? surfaceState.recentTasks.find((task) => task.taskId === panel.taskId) ?? null
                     : null;
+                const latestRun = getLatestWorkbenchPanelRun(panel);
+                const runFeedback =
+                  latestRun && latestRun.status !== 'completed'
+                    ? getChatRunFeedback(latestRun)
+                    : latestRun?.status === 'failed'
+                      ? getChatRunFeedback(latestRun)
+                      : null;
+                const activityItems = getWorkbenchPanelActivityItems(panel);
+                const panelComposerState = composerState[panel.slot];
+                const mergedMessages = mergeWorkbenchPanelMessages(
+                  panel.conversation?.messages ?? [],
+                  panelComposerState.pendingSubmission,
+                );
+                const conversationRunsById = new Map(
+                  (panel.conversation?.runs ?? []).map((run) => [run.runId, run]),
+                );
+                const runBadgeLabel = getPanelRunBadgeLabel(latestRun);
+                const canSubmit =
+                  desktopClient.available &&
+                  panel.conversation !== null &&
+                  panelComposerState.draft.trim().length > 0 &&
+                  panelComposerState.submitState.status !== 'submitting';
 
                 return (
                   <article
                     key={panel.slot}
                     className={`panel workbench-panel${isActive ? ' workbench-panel-active' : ''}${panel.taskId === null ? ' workbench-panel-idle' : ''}`}
                   >
-                    <div className="panel-header">
+                    <div className="panel-header panel-header-stack">
                       <div>
-                        <span className="panel-kicker">{workbenchSlotLabels[panel.slot]}</span>
+                        <div className="workbench-panel-title-row">
+                          <span className="panel-kicker">{workbenchSlotLabels[panel.slot]}</span>
+                          <div className="workbench-panel-badges">
+                            <span className={isActive ? 'badge badge-primary' : 'badge badge-muted'}>
+                              {isActive ? '집중 패널' : '독립 패널'}
+                            </span>
+                            {runBadgeLabel ? (
+                              <span className="badge badge-muted">{runBadgeLabel}</span>
+                            ) : null}
+                            {taskSummary ? (
+                              <span className="badge badge-muted">
+                                최근 활동 {taskSummary.lastActivity}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
                         <h3>{panel.title}</h3>
+                        <p>{panel.note}</p>
                       </div>
-                      <span className={isActive ? 'badge badge-primary' : 'badge badge-muted'}>
-                        {isActive ? '집중 패널' : getWorkbenchStatusLabel(panel.status)}
-                      </span>
                     </div>
-
-                    <p>{panel.note}</p>
 
                     {taskSummary ? (
                       <>
@@ -282,6 +445,164 @@ export function WorkbenchRoute() {
                             {taskSummary.lastActivity} · 예상 {taskSummary.savingsRate}% 절감
                           </span>
                         </div>
+
+                        {runFeedback ? (
+                          <article className={`run-status-card run-status-card-${runFeedback.tone}`}>
+                            <div className="run-status-header">
+                              <span className="badge badge-muted">{runFeedback.badgeLabel}</span>
+                              <strong>{runFeedback.title}</strong>
+                              <p>{runFeedback.description}</p>
+                            </div>
+                            <div className="run-status-steps">
+                              {runFeedback.steps.map((step) => (
+                                <span
+                                  key={step.id}
+                                  className={`run-status-step run-status-step-${step.state}`}
+                                >
+                                  {step.label}
+                                </span>
+                              ))}
+                            </div>
+                            {runFeedback.detail ? (
+                              <p className="run-status-detail">{runFeedback.detail}</p>
+                            ) : null}
+                          </article>
+                        ) : null}
+
+                        <section className="workbench-panel-feed">
+                          <div className="workbench-panel-section-header">
+                            <span className="panel-kicker">Conversation</span>
+                            <span className="badge badge-muted">
+                              {mergedMessages.length}개 메시지
+                            </span>
+                          </div>
+
+                          {mergedMessages.length > 0 ? (
+                            <div className="workbench-panel-feed-list">
+                              {mergedMessages.map((message) => {
+                                const responseRun = message.runId
+                                  ? conversationRunsById.get(message.runId) ?? null
+                                  : null;
+                                const responseMetadata =
+                                  message.role === 'assistant'
+                                    ? getChatResponseMetadata(responseRun)
+                                    : null;
+
+                                return (
+                                  <article
+                                    key={message.messageId}
+                                    className={
+                                      message.role === 'user'
+                                        ? 'bubble bubble-user workbench-bubble'
+                                        : 'bubble bubble-history workbench-bubble'
+                                    }
+                                  >
+                                    <span className="bubble-role">
+                                      {message.role === 'user' ? '저장된 한국어 원문' : '복원된 한국어 응답'}
+                                    </span>
+                                    <p>{message.contentKo}</p>
+                                    {message.role === 'user' &&
+                                    panelComposerState.pendingSubmission?.messageId === message.messageId ? (
+                                      <span className="bubble-meta">저장 중</span>
+                                    ) : null}
+                                    {responseMetadata ? (
+                                      <div className="response-meta-row">
+                                        {responseMetadata.items.map((item) => (
+                                          <span
+                                            key={item.id}
+                                            className={
+                                              item.tone === 'savings'
+                                                ? 'response-meta-item response-meta-item-savings'
+                                                : 'response-meta-item'
+                                            }
+                                          >
+                                            {item.label}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <article className="workbench-state-card">
+                              <span className="panel-kicker">Empty Conversation</span>
+                              <strong>아직 이어진 대화가 없습니다</strong>
+                              <p>채팅에서 시작한 요청이 이 패널에 연결되면 같은 task 대화가 여기에 쌓입니다.</p>
+                            </article>
+                          )}
+                        </section>
+
+                        <section className="workbench-panel-activity">
+                          <div className="workbench-panel-section-header">
+                            <span className="panel-kicker">{workbenchSurfaceCopy.panelActivityTitle}</span>
+                            <span className="badge badge-muted">
+                              {activityItems.length}개 요약
+                            </span>
+                          </div>
+                          <div className="workbench-activity-log">
+                            {activityItems.map((item) => (
+                              <article
+                                key={item.id}
+                                className={`workbench-activity-item workbench-activity-item-${item.tone}`}
+                              >
+                                <strong>{item.label}</strong>
+                                <p>{item.detail}</p>
+                              </article>
+                            ))}
+                          </div>
+                        </section>
+
+                        <section className="workbench-panel-compose">
+                          <div className="workbench-panel-section-header">
+                            <div>
+                              <span className="panel-kicker">{workbenchSurfaceCopy.panelComposerTitle}</span>
+                              <p>{workbenchSurfaceCopy.panelComposerBody}</p>
+                            </div>
+                            <span className="badge badge-muted">
+                              {panel.conversation
+                                ? `conversation ${panel.conversation.conversationId}`
+                                : '연결 대기'}
+                            </span>
+                          </div>
+
+                          <textarea
+                            aria-label={`Workbench panel ${workbenchSlotLabels[panel.slot]} draft`}
+                            className="composer-input workbench-panel-input"
+                            value={panelComposerState.draft}
+                            onChange={(event) => {
+                              dispatchComposerAction({
+                                type: 'draft_changed',
+                                slot: panel.slot,
+                                draft: event.target.value,
+                              });
+                            }}
+                            placeholder={workbenchSurfaceCopy.panelInputPlaceholder}
+                          />
+
+                          <div className="workbench-panel-compose-footer">
+                            <div className="composer-meta">
+                              <strong>{taskSummary.toolSummary}</strong>
+                              <p>{workbenchSurfaceCopy.panelComposerBody}</p>
+                              {panelComposerState.submitState.message ? (
+                                <p className="composer-status">{panelComposerState.submitState.message}</p>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              className="primary-button workbench-panel-submit"
+                              onClick={() => {
+                                void handlePanelSubmit(panel.slot);
+                              }}
+                              disabled={!canSubmit}
+                            >
+                              {panelComposerState.submitState.status === 'submitting'
+                                ? '이어 붙이는 중…'
+                                : workbenchSurfaceCopy.panelSubmitAction}
+                            </button>
+                          </div>
+                        </section>
 
                         <div className="workbench-panel-toolbar">
                           <span className="panel-kicker">Panel Actions</span>

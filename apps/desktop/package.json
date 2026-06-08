@@ -24,7 +24,8 @@
     "validate:story-3.3": "npm run test",
     "validate:story-3.4": "npm run test",
     "validate:story-3.5": "npm run test",
-    "validate:story-5.3": "npm run test"
+    "validate:story-5.3": "npm run test",
+    "validate:story-5.4": "npm run test"
   },
   "dependencies": {
     "react": "^18.2.0",

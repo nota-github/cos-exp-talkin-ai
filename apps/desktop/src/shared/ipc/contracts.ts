@@ -155,12 +155,20 @@ export type ChatFeedResult = {
   activeRun: ChatFeedRunSummary | null;
 };
 
+export type WorkbenchPanelConversation = {
+  conversationId: string;
+  messages: ChatFeedMessage[];
+  runs: ChatFeedRunSummary[];
+  activeRun: ChatFeedRunSummary | null;
+};
+
 export type WorkbenchPanel = {
   slot: PanelSlot;
   taskId: string | null;
   title: string;
   status: TaskStatus | 'idle';
   note: string;
+  conversation: WorkbenchPanelConversation | null;
 };
 
 export type WorkbenchRecentTask = {

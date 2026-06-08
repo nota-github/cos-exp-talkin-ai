@@ -1,12 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ChatFeedItem,
-  ChatFeedMessage,
   ChatFeedQuery,
   ChatFeedResult,
-  ChatFeedRunFailureSummary,
-  ChatFeedRunSummary,
-  ChatFeedRunUsageSummary,
   CloudModelId,
   OptimizationMode,
   RetryRunCommand,
@@ -26,6 +22,10 @@ import {
   type SqliteConnection,
   type SqliteDatabaseHandle,
 } from '../persistence/database';
+import {
+  listConversationMessages,
+  listConversationRuns,
+} from './feed-projection.ts';
 import type { OptimizationStageOrchestrator } from '../workflows/index.ts';
 
 type SqlPrimitive = string | number | null;
@@ -53,38 +53,6 @@ type TaskFeedRow = {
   selected_model: CloudModelId | null;
   mode: OptimizationMode | null;
   preview: string | null;
-};
-
-type MessageRow = {
-  id: string;
-  conversation_id: string;
-  role: ChatFeedMessage['role'];
-  content_ko: string;
-  run_id: string | null;
-  created_at: string;
-};
-
-type RunRow = {
-  id: string;
-  task_id: string;
-  message_id: string;
-  status: ChatFeedRunSummary['status'];
-  model: CloudModelId;
-  mode: OptimizationMode;
-  error_code: string | null;
-};
-
-type RunStageRow = {
-  stage: Exclude<ChatFeedRunSummary['stage'], null>;
-  details_json: string | null;
-};
-
-type UsageRow = {
-  baseline_input_tokens: number;
-  optimized_input_tokens: number;
-  output_tokens: number;
-  latency_ms: number;
-  is_estimated: number;
 };
 
 export interface ChatHistoryService {
@@ -167,81 +135,6 @@ function createEmptyChatFeed(): ChatFeedResult {
   };
 }
 
-function parseStageDetails(detailsJson: string | null) {
-  if (!detailsJson) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(detailsJson) as Record<string, unknown>;
-    return typeof parsed === 'object' && parsed !== null ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function readString(value: unknown) {
-  return typeof value === 'string' && value.trim().length > 0 ? value : null;
-}
-
-function readBoolean(value: unknown) {
-  return typeof value === 'boolean' ? value : null;
-}
-
-function buildFailureSummary(
-  run: Pick<RunRow, 'status' | 'error_code'>,
-  latestStage: RunStageRow | undefined,
-): ChatFeedRunFailureSummary | null {
-  if (run.status !== 'failed' || !latestStage) {
-    return null;
-  }
-
-  const details = parseStageDetails(latestStage.details_json);
-  const failedStage = readString(details?.stage);
-
-  return {
-    failedStage:
-      failedStage === 'queued' ||
-      failedStage === 'optimizing' ||
-      failedStage === 'optimized' ||
-      failedStage === 'cloud_pending' ||
-      failedStage === 'restoring' ||
-      failedStage === 'completed' ||
-      failedStage === 'failed'
-        ? failedStage
-        : latestStage.stage,
-    message: readString(details?.message),
-    guidance: readString(details?.guidance),
-    retryable:
-      readBoolean(details?.retryable) ??
-      readBoolean(details?.recoverable),
-  };
-}
-
-function computeSavingsRate(baselineTokens: number, optimizedTokens: number) {
-  if (baselineTokens <= 0) {
-    return 0;
-  }
-
-  const rawRate = Math.round((1 - optimizedTokens / baselineTokens) * 100);
-  return Math.max(0, rawRate);
-}
-
-function mapRunUsageSummary(row: UsageRow | undefined): ChatFeedRunUsageSummary | null {
-  if (!row) {
-    return null;
-  }
-
-  return {
-    baselineInputTokens: row.baseline_input_tokens,
-    optimizedInputTokens: row.optimized_input_tokens,
-    outputTokens: row.output_tokens,
-    latencyMs: row.latency_ms,
-    savingsRate: computeSavingsRate(row.baseline_input_tokens, row.optimized_input_tokens),
-    isEstimated: row.is_estimated === 1,
-  };
-}
-
 async function withChatPersistence<TValue>(
   options: PersistentChatHistoryServiceOptions,
   work: (persistence: ChatRunPersistence, connection: SqliteConnection) => Promise<TValue>,
@@ -289,82 +182,6 @@ async function listTaskFeedRows(connection: SqliteConnection) {
   `);
 }
 
-async function listConversationMessages(
-  connection: SqliteConnection,
-  conversationId: string,
-) {
-  return connection.query<MessageRow>(`
-    SELECT
-      id,
-      conversation_id,
-      role,
-      content_ko,
-      run_id,
-      created_at
-    FROM messages
-    WHERE conversation_id = ${sqlValue(conversationId)}
-    ORDER BY created_at ASC;
-  `);
-}
-
-async function listConversationRuns(
-  connection: SqliteConnection,
-  conversationId: string,
-): Promise<ChatFeedRunSummary[]> {
-  const runRows = await connection.query<RunRow>(`
-    SELECT
-      id,
-      task_id,
-      message_id,
-      status,
-      model,
-      mode,
-      error_code
-    FROM run_records
-    WHERE conversation_id = ${sqlValue(conversationId)}
-    ORDER BY started_at ASC, rowid ASC;
-  `);
-
-  const summaries: ChatFeedRunSummary[] = [];
-
-  for (const run of runRows) {
-    const [latestStage] = await connection.query<RunStageRow>(`
-      SELECT
-        stage,
-        details_json
-      FROM run_stages
-      WHERE run_id = ${sqlValue(run.id)}
-      ORDER BY started_at DESC, rowid DESC
-      LIMIT 1;
-    `);
-    const [usageRow] = await connection.query<UsageRow>(`
-      SELECT
-        baseline_input_tokens,
-        optimized_input_tokens,
-        output_tokens,
-        latency_ms,
-        is_estimated
-      FROM usage_records
-      WHERE run_id = ${sqlValue(run.id)}
-      LIMIT 1;
-    `);
-
-    summaries.push({
-      runId: run.id,
-      sourceMessageId: run.message_id,
-      status: run.status,
-      stage: latestStage?.stage ?? null,
-      model: run.model,
-      mode: run.mode,
-      errorCode: run.error_code,
-      failure: buildFailureSummary(run, latestStage),
-      usage: mapRunUsageSummary(usageRow),
-    });
-  }
-
-  return summaries;
-}
-
 function mapFeedItems(rows: TaskFeedRow[]): ChatFeedItem[] {
   return rows.map((row) => ({
     taskId: row.task_id,
@@ -376,17 +193,6 @@ function mapFeedItems(rows: TaskFeedRow[]): ChatFeedItem[] {
     mode: row.mode ?? 'balanced',
     savingsRate: 0,
     updatedAt: row.last_activity_at,
-  }));
-}
-
-function mapFeedMessages(rows: MessageRow[]): ChatFeedMessage[] {
-  return rows.map((row) => ({
-    messageId: row.id,
-    conversationId: row.conversation_id,
-    runId: row.run_id,
-    role: row.role,
-    contentKo: row.content_ko,
-    createdAt: row.created_at,
   }));
 }
 
@@ -420,11 +226,98 @@ export function createPersistentChatHistoryService(
     async submitPrompt(request) {
       const result = await withChatPersistence(options, async (persistence) => {
         const createdAt = now();
-        const taskId = createId('task');
-        const conversationId = createId('conversation');
         const messageId = createId('message');
         const runId = createId('run');
         const stageId = createId('stage');
+
+        if (request.conversationId) {
+          return persistence.transaction(async (tx) => {
+            const conversation = await tx.conversations.getById(request.conversationId);
+
+            if (!conversation) {
+              throw new Error('이어갈 대화를 찾을 수 없습니다.');
+            }
+
+            const task = await tx.tasks.getById(conversation.taskId);
+
+            if (!task) {
+              throw new Error('이어갈 작업을 찾을 수 없습니다.');
+            }
+
+            const existingRuns = await tx.runRecords.listByConversation(conversation.id);
+            const latestRun = existingRuns.at(-1) ?? null;
+
+            if (
+              latestRun &&
+              latestRun.status !== 'completed' &&
+              latestRun.status !== 'failed'
+            ) {
+              throw new Error('이 패널의 이전 실행이 아직 진행 중입니다.');
+            }
+
+            await tx.conversations.update({
+              conversationId: conversation.id,
+              summary: normalizeSummary(request.promptKo),
+              mode: request.optimizationMode,
+              selectedModel: request.selectedModel,
+              updatedAt: createdAt,
+            });
+
+            await tx.messages.create({
+              id: messageId,
+              conversationId: conversation.id,
+              role: 'user',
+              contentKo: request.promptKo,
+              runId,
+              createdAt,
+            });
+
+            await tx.runRecords.create({
+              id: runId,
+              taskId: task.id,
+              conversationId: conversation.id,
+              messageId,
+              status: 'queued',
+              provider: providerByModel[request.selectedModel],
+              model: request.selectedModel,
+              mode: request.optimizationMode,
+              startedAt: createdAt,
+              endedAt: null,
+              errorCode: null,
+            });
+
+            await tx.runStages.create({
+              id: stageId,
+              runId,
+              stage: 'queued',
+              status: 'pending',
+              startedAt: createdAt,
+              endedAt: null,
+              details: {
+                source: 'conversation-continue',
+                contentLength: request.promptKo.length,
+                storedBeforeExecution: true,
+              },
+            });
+
+            await tx.tasks.updateActivity({
+              taskId: task.id,
+              updatedAt: createdAt,
+              lastActivityAt: createdAt,
+            });
+
+            return {
+              taskId: task.id,
+              conversationId: conversation.id,
+              messageId,
+              runId,
+              acceptedStatus: 'queued' as const,
+            };
+          });
+        }
+
+        const taskId = createId('task');
+        const conversationId = createId('conversation');
 
         await persistence.transaction(async (tx) => {
           await tx.tasks.create({
@@ -596,7 +489,7 @@ export function createPersistentChatHistoryService(
           };
         }
 
-        const messageRows = await listConversationMessages(connection, activeTaskRow.conversation_id);
+        const messages = await listConversationMessages(connection, activeTaskRow.conversation_id);
         const runs = await listConversationRuns(connection, activeTaskRow.conversation_id);
         const activeRun = runs[runs.length - 1] ?? null;
 
@@ -606,7 +499,7 @@ export function createPersistentChatHistoryService(
           activeTaskTitle: activeTaskRow.title,
           recommendedPrompts: [...recommendedPrompts],
           items,
-          messages: mapFeedMessages(messageRows),
+          messages,
           runs,
           activeRun,
         };

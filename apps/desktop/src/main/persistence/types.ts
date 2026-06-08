@@ -240,6 +240,14 @@ export type UpdateRunRecordStatusInput = {
   errorCode?: string | null;
 };
 
+export type UpdateConversationInput = {
+  conversationId: string;
+  summary?: string | null;
+  mode?: OptimizationMode;
+  selectedModel?: CloudModelId;
+  updatedAt: string;
+};
+
 export type UpdateTaskActivityInput = {
   taskId: string;
   updatedAt: string;
@@ -282,6 +290,7 @@ export interface TaskRepository {
 export interface ConversationRepository {
   create(input: CreateConversationInput): Promise<ConversationRecord>;
   getById(conversationId: string): Promise<ConversationRecord | null>;
+  update(input: UpdateConversationInput): Promise<ConversationRecord | null>;
 }
 
 export interface MessageRepository {
