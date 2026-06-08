@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
+import { createPersistentChatHistoryService } from './chat/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createPersistentAppSettingsService } from './settings/index.ts';
 import { createMainWindowOptions } from './window-config';
@@ -12,14 +13,19 @@ function registerIpcHandlers() {
     return;
   }
 
+  const dbPath = join(app.getPath('userData'), 'talkin-ai.db');
+
   registerDesktopIpcHandlers(ipcMain, {
     broadcast: (channel, payload) => {
       for (const window of BrowserWindow.getAllWindows()) {
         window.webContents.send(channel, payload);
       }
     },
+    chatHistoryService: createPersistentChatHistoryService({
+      dbPath,
+    }),
     settingsService: createPersistentAppSettingsService({
-      dbPath: join(app.getPath('userData'), 'talkin-ai.db'),
+      dbPath,
     }),
   });
 

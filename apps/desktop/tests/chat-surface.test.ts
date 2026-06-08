@@ -6,6 +6,8 @@ import {
   chatSurfaceCopy,
   createStarterDraftSelection,
   getChatDraftPreview,
+  mergeVisibleConversationMessages,
+  submitChatPromptDraft,
 } from '../src/renderer/routes/chat-surface.ts';
 
 const chatRouteSource = readFileSync(new URL('../src/renderer/routes/ChatRoute.tsx', import.meta.url), 'utf8');
@@ -46,4 +48,77 @@ test('story-2.1:AC-3 and story-2.1:VAL-3 keep the inbox shell, composer controls
     chatStylesSource,
     /grid-template-columns:\s*minmax\(320px,\s*0\.88fr\)\s*minmax\(0,\s*1\.45fr\);/,
   );
+});
+
+test('story-2.2:AC-2 and story-2.2:AC-6 successful local save keeps the exact Korean draft visible until feed refresh', async () => {
+  const promptDraft = '\n첫 줄을 그대로 남겨 주세요.\n둘째 줄과 표 항목도 유지해 주세요.\n';
+  let observedPromptKo = '';
+
+  const outcome = await submitChatPromptDraft({
+    activeStarterId: 'business-plan',
+    now: () => '2026-06-08T02:20:00.000Z',
+    optimizationMode: 'long_context',
+    promptDraft,
+    selectedModel: 'claude-sonnet-4',
+    submitPrompt: async (request) => {
+      observedPromptKo = request.promptKo;
+
+      return {
+        taskId: 'task-101',
+        conversationId: 'conv-101',
+        messageId: 'msg-101',
+        runId: 'run-101',
+        acceptedStatus: 'queued',
+      };
+    },
+  });
+
+  assert.equal(observedPromptKo, promptDraft);
+  assert.equal(outcome.promptDraft, '');
+  assert.equal(outcome.activeStarterId, null);
+  assert.deepEqual(outcome.pendingSubmission, {
+    messageId: 'msg-101',
+    conversationId: 'conv-101',
+    runId: 'run-101',
+    role: 'user',
+    contentKo: promptDraft,
+    createdAt: '2026-06-08T02:20:00.000Z',
+  });
+  assert.deepEqual(mergeVisibleConversationMessages([], outcome.pendingSubmission), [
+    outcome.pendingSubmission,
+  ]);
+  assert.deepEqual(outcome.submitState, {
+    status: 'success',
+    message: chatSurfaceCopy.submitSavedMessage,
+  });
+});
+
+test('story-2.2:AC-4 and story-2.2:VAL-3 failed local save keeps the Korean draft and returns safe error copy', async () => {
+  const promptDraft = '실패 후에도 이 한국어 draft는 그대로 남아 있어야 합니다.\n체크리스트도 유지해 주세요.';
+
+  const outcome = await submitChatPromptDraft({
+    activeStarterId: 'pdf-summary',
+    optimizationMode: 'quality',
+    promptDraft,
+    selectedModel: 'gpt-4.1',
+    submitPrompt: async () => {
+      throw new Error('forced local write failure');
+    },
+  });
+
+  assert.equal(outcome.promptDraft, promptDraft);
+  assert.equal(outcome.activeStarterId, 'pdf-summary');
+  assert.equal(outcome.pendingSubmission, null);
+  assert.deepEqual(outcome.submitState, {
+    status: 'error',
+    message: chatSurfaceCopy.submitFailureMessage,
+  });
+});
+
+test('story-2.2:AC-5 and story-2.2:AC-6 source switches the stage from landing guide to conversation feed with preserved multiline bubbles', () => {
+  assert.match(chatRouteSource, /conversationMessages\.map/);
+  assert.match(chatRouteSource, /pendingDraftPreview/);
+  assert.match(chatRouteSource, /!showConversationFeed \?/);
+  assert.match(chatStylesSource, /\.bubble-meta\s*\{/);
+  assert.match(chatStylesSource, /white-space:\s*pre-wrap/);
 });
