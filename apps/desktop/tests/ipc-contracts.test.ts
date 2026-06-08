@@ -170,6 +170,10 @@ test('story-1.2:VAL-3 query and invalidation flow stay aligned through preload a
       kind: 'projection',
       projection: 'settings',
     },
+    {
+      kind: 'projection',
+      projection: 'connectionHealth',
+    },
   ]);
 });
 

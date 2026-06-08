@@ -11,6 +11,8 @@ export const commandNames = [
   'closeWorkbenchPanel',
   'moveTaskStatus',
   'updateSettings',
+  'saveApiKey',
+  'deleteApiKey',
 ] as const;
 
 export const queryNames = [
@@ -23,6 +25,7 @@ export const queryNames = [
   'getHistoryFeed',
   'getHistoryEntry',
   'getSettings',
+  'getConnectionHealth',
 ] as const;
 
 export type DesktopCommandName = (typeof commandNames)[number];
@@ -48,6 +51,8 @@ export const ipcChannels: {
     closeWorkbenchPanel: 'talkin-ai:command:closeWorkbenchPanel',
     moveTaskStatus: 'talkin-ai:command:moveTaskStatus',
     updateSettings: 'talkin-ai:command:updateSettings',
+    saveApiKey: 'talkin-ai:command:saveApiKey',
+    deleteApiKey: 'talkin-ai:command:deleteApiKey',
   },
   queries: {
     getChatFeed: 'talkin-ai:query:getChatFeed',
@@ -59,6 +64,7 @@ export const ipcChannels: {
     getHistoryFeed: 'talkin-ai:query:getHistoryFeed',
     getHistoryEntry: 'talkin-ai:query:getHistoryEntry',
     getSettings: 'talkin-ai:query:getSettings',
+    getConnectionHealth: 'talkin-ai:query:getConnectionHealth',
   },
   events: {
     invalidated: 'talkin-ai:event:invalidated',
@@ -78,6 +84,44 @@ export type AppSettings = {
   responseLanguage: 'ko' | 'en';
   theme: 'light' | 'dark' | 'system';
   advancedPromptPreview: boolean;
+};
+
+export type ConnectionState = 'connected' | 'needs_attention' | 'setup_required';
+
+export type ConnectionStatusSummary = {
+  state: ConnectionState;
+  label: '연결됨' | '확인 필요' | '설정 필요';
+  summary: string;
+  guidance: string;
+};
+
+export type ProviderConnectionItem = {
+  provider: ProviderId;
+  label: string;
+  defaultModel: CloudModelId;
+  isSelected: boolean;
+  hasStoredKey: boolean;
+  maskedKeyPreview: string | null;
+  lastCheckedAt: string | null;
+  status: ConnectionStatusSummary;
+};
+
+export type LocalEngineConnection = {
+  engineId: string;
+  label: string;
+  transport: 'stdio' | 'fake' | 'unknown';
+  lastCheckedAt: string | null;
+  warnings: string[];
+  status: ConnectionStatusSummary;
+};
+
+export type ConnectionHealthQuery = EmptyPayload;
+
+export type ConnectionHealthResult = {
+  selectedProvider: ProviderId;
+  selectedModel: CloudModelId;
+  providers: ProviderConnectionItem[];
+  localEngine: LocalEngineConnection;
 };
 
 export type ChatFeedItem = {
@@ -554,6 +598,27 @@ export type UpdateSettingsResult = {
   updatedKeys: Array<keyof AppSettings>;
 };
 
+export type SaveApiKeyCommand = {
+  provider: ProviderId;
+  apiKey: string;
+};
+
+export type SaveApiKeyResult = {
+  provider: ProviderId;
+  hasStoredKey: true;
+  maskedKeyPreview: string;
+};
+
+export type DeleteApiKeyCommand = {
+  provider: ProviderId;
+};
+
+export type DeleteApiKeyResult = {
+  provider: ProviderId;
+  hasStoredKey: false;
+  maskedKeyPreview: null;
+};
+
 export type DesktopCommandDefinitions = {
   submitPrompt: {
     request: SubmitPromptCommand;
@@ -603,6 +668,14 @@ export type DesktopCommandDefinitions = {
     request: UpdateSettingsCommand;
     response: UpdateSettingsResult;
   };
+  saveApiKey: {
+    request: SaveApiKeyCommand;
+    response: SaveApiKeyResult;
+  };
+  deleteApiKey: {
+    request: DeleteApiKeyCommand;
+    response: DeleteApiKeyResult;
+  };
 };
 
 export type DesktopQueryDefinitions = {
@@ -642,6 +715,10 @@ export type DesktopQueryDefinitions = {
     request: SettingsQuery;
     response: AppSettings;
   };
+  getConnectionHealth: {
+    request: ConnectionHealthQuery;
+    response: ConnectionHealthResult;
+  };
 };
 
 export type InvalidationTarget =
@@ -661,7 +738,8 @@ export type InvalidationTarget =
         | 'usageDashboard'
         | 'historyFeed'
         | 'historyEntry'
-        | 'settings';
+        | 'settings'
+        | 'connectionHealth';
       keys?: string[];
     };
 

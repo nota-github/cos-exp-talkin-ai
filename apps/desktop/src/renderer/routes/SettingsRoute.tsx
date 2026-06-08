@@ -1,5 +1,23 @@
-import type { AppSettings } from '../../shared/ipc/contracts';
+import { useState, type FormEvent } from 'react';
+import type {
+  AppSettings,
+  LocalEngineConnection,
+  ProviderConnectionItem,
+  ProviderId,
+} from '../../shared/ipc/contracts';
 import { useRendererSettings } from '../app/renderer-settings';
+import {
+  createDesktopQueryDescriptor,
+  getDesktopQueryCache,
+  getRendererDesktopClient,
+} from '../lib/ipc/query-client';
+import { useDesktopQuery } from '../lib/ipc/query-hooks';
+import {
+  getConnectionBadgeClass,
+  getProviderMutationSuccessMessage,
+  previewConnectionHealth,
+  settingsConnectionsCopy,
+} from './settings-connections-surface';
 import {
   advancedPreviewOptions,
   getAppSettingsLabels,
@@ -14,6 +32,38 @@ import {
 } from './settings-surface';
 
 type SettingsOptionValue = string | boolean;
+
+type ConnectionMutationState = {
+  status: 'idle' | 'saving' | 'success' | 'error';
+  message: string | null;
+};
+
+type ConnectionRailState = 'preview' | 'loading' | 'error' | 'ready';
+
+type ConnectionSummaryViewModel = {
+  detail: string;
+  guidance: string;
+  meta: string | null;
+  statusClassName: string;
+  statusLabel: string;
+  title: string;
+  warnings?: string[];
+};
+
+function createIdleConnectionMutationState(): ConnectionMutationState {
+  return {
+    status: 'idle',
+    message: null,
+  };
+}
+
+function createInitialConnectionMutationState() {
+  return {
+    openai: createIdleConnectionMutationState(),
+    anthropic: createIdleConnectionMutationState(),
+    google: createIdleConnectionMutationState(),
+  } satisfies Record<ProviderId, ConnectionMutationState>;
+}
 
 function SettingsStateCard({
   kicker,
@@ -98,6 +148,205 @@ function SettingsChoiceGroup({
   );
 }
 
+function ConnectionSummaryCard({
+  detail,
+  guidance,
+  kicker,
+  meta,
+  statusClassName,
+  statusLabel,
+  title,
+  warnings,
+}: {
+  detail: string;
+  guidance: string;
+  kicker: string;
+  meta: string | null;
+  statusClassName: string;
+  statusLabel: string;
+  title: string;
+  warnings?: string[];
+}) {
+  return (
+    <section className="settings-connection-brief">
+      <div className="settings-connection-brief-top">
+        <div>
+          <span className="panel-kicker">{kicker}</span>
+          <strong>{title}</strong>
+        </div>
+        <span className={statusClassName}>{statusLabel}</span>
+      </div>
+
+      <p>{detail}</p>
+      <span className="settings-connection-guidance">{guidance}</span>
+      {meta ? <span className="settings-connection-meta">{meta}</span> : null}
+      {warnings && warnings.length > 0 ? (
+        <div className="chip-row">
+          {warnings.map((warning) => (
+            <span key={warning} className="badge badge-muted">
+              {warning}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function ProviderKeyEditor({
+  item,
+  disabled,
+  mutationState,
+  onDelete,
+  onSave,
+}: {
+  item: ProviderConnectionItem;
+  disabled: boolean;
+  mutationState: ConnectionMutationState;
+  onDelete: (provider: ProviderId, form: HTMLFormElement | null) => Promise<void>;
+  onSave: (provider: ProviderId, event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const feedbackClassName =
+    mutationState.status === 'success'
+      ? 'settings-inline-feedback settings-inline-feedback-success'
+      : mutationState.status === 'error'
+        ? 'settings-inline-feedback settings-inline-feedback-error'
+        : 'settings-inline-feedback';
+
+  return (
+    <article className="settings-provider-editor">
+      <div className="settings-provider-editor-top">
+        <div className="settings-provider-title-stack">
+          <div className="settings-provider-title-row">
+            <strong>{item.label}</strong>
+            {item.isSelected ? <span className="badge badge-primary">현재 기본 모델</span> : null}
+            <span className="badge badge-muted">{item.defaultModel}</span>
+          </div>
+          <p>{item.status.summary}</p>
+        </div>
+        <span className={getConnectionBadgeClass(item.status.state)}>{item.status.label}</span>
+      </div>
+
+      <div className="settings-provider-subline">
+        <span>
+          {item.maskedKeyPreview
+            ? `저장된 키 ${item.maskedKeyPreview}`
+            : '저장된 키 없음'}
+        </span>
+        {item.lastCheckedAt ? (
+          <span className="settings-connection-meta">
+            마지막 확인 {item.lastCheckedAt.slice(11, 16)}
+          </span>
+        ) : null}
+      </div>
+
+      <form
+        className="settings-provider-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSave(item.provider, event);
+        }}
+      >
+        <input
+          type="password"
+          name="apiKey"
+          autoComplete="off"
+          spellCheck={false}
+          className="settings-provider-input"
+          placeholder={settingsConnectionsCopy.inputPlaceholder}
+          disabled={disabled || mutationState.status === 'saving'}
+        />
+
+        <div className="settings-provider-actions">
+          <button
+            type="submit"
+            className="soft-button"
+            disabled={disabled || mutationState.status === 'saving'}
+          >
+            {mutationState.status === 'saving' ? '저장 중' : settingsConnectionsCopy.saveLabel}
+          </button>
+          <button
+            type="button"
+            className="ghost-chip"
+            disabled={
+              disabled ||
+              mutationState.status === 'saving' ||
+              !item.hasStoredKey
+            }
+            onClick={(event) => {
+              void onDelete(item.provider, event.currentTarget.form);
+            }}
+          >
+            {settingsConnectionsCopy.deleteLabel}
+          </button>
+        </div>
+      </form>
+
+      <span className="settings-connection-guidance">{item.status.guidance}</span>
+      {mutationState.message ? (
+        <p className={feedbackClassName} aria-live="polite">
+          {mutationState.message}
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function getConnectionMetaLabel(connection: LocalEngineConnection | ProviderConnectionItem) {
+  if (!connection.lastCheckedAt) {
+    return null;
+  }
+
+  return `마지막 확인 ${connection.lastCheckedAt.slice(11, 16)}`;
+}
+
+function getPendingConnectionSummary(args: {
+  railState: Extract<ConnectionRailState, 'loading' | 'error'>;
+  target: 'provider' | 'localEngine';
+}): ConnectionSummaryViewModel {
+  const statusClassName =
+    args.railState === 'loading' ? 'badge badge-muted' : 'badge badge-primary';
+  const statusLabel = args.railState === 'loading' ? '확인 중' : '확인 필요';
+
+  if (args.target === 'provider') {
+    return {
+      title:
+        args.railState === 'loading'
+          ? '현재 기본 모델 연결을 확인하는 중'
+          : '현재 기본 모델 연결을 불러오지 못했습니다',
+      statusClassName,
+      statusLabel,
+      detail:
+        args.railState === 'loading'
+          ? '선택된 제공자와 저장된 키 상태를 읽고 있습니다.'
+          : '현재 기본 모델 제공자의 실제 연결 상태를 지금은 확인할 수 없습니다.',
+      guidance:
+        args.railState === 'loading'
+          ? '잠시만 기다리면 실제 연결 상태가 이 자리에 표시됩니다.'
+          : '연결 다시 확인을 눌러 재시도하거나 앱을 다시 열어 보세요.',
+      meta: null,
+    };
+  }
+
+  return {
+    title:
+      args.railState === 'loading'
+        ? '로컬 최적화 엔진 상태를 확인하는 중'
+        : '로컬 최적화 엔진 상태를 불러오지 못했습니다',
+    statusClassName,
+    statusLabel,
+    detail:
+      args.railState === 'loading'
+        ? 'translation MCP와 현재 연결 구성을 읽고 있습니다.'
+        : '로컬 최적화 엔진의 실제 연결 상태를 지금은 확인할 수 없습니다.',
+    guidance:
+      args.railState === 'loading'
+        ? '엔진 상태가 준비되면 여기에 바로 표시됩니다.'
+        : '연결 다시 확인을 눌러 재시도하거나 앱을 다시 열어 보세요.',
+    meta: null,
+  };
+}
+
 export function SettingsRoute() {
   const {
     desktopAvailable,
@@ -109,6 +358,15 @@ export function SettingsRoute() {
     surfaceState,
     updateSettings,
   } = useRendererSettings();
+  const desktopClient = getRendererDesktopClient();
+  const queryCache = getDesktopQueryCache();
+  const connectionDescriptor = createDesktopQueryDescriptor('getConnectionHealth', {});
+  const connectionQuery = useDesktopQuery(queryCache, connectionDescriptor, {
+    enabled: desktopClient.available,
+  });
+  const [connectionMutationStates, setConnectionMutationStates] = useState(
+    createInitialConnectionMutationState,
+  );
 
   const controlsDisabled = isSaving || !desktopAvailable;
   const heroState = getSettingsHeroState({
@@ -118,6 +376,83 @@ export function SettingsRoute() {
   const visibleSettings = settings ?? previewAppSettings;
   const visibleLabels = getAppSettingsLabels(visibleSettings);
   const showSettingsControls = shouldRenderSettingsControls(surfaceState);
+  const connectionLoadingWithoutData =
+    desktopClient.available &&
+    connectionQuery.status === 'loading' &&
+    !connectionQuery.data;
+  const connectionErrorWithoutData =
+    desktopClient.available &&
+    connectionQuery.status === 'error' &&
+    !connectionQuery.data;
+  const connectionRefreshing =
+    desktopClient.available &&
+    connectionQuery.status === 'loading' &&
+    Boolean(connectionQuery.data);
+  const connectionRailState: ConnectionRailState = !desktopClient.available
+    ? 'preview'
+    : connectionLoadingWithoutData
+      ? 'loading'
+      : connectionErrorWithoutData
+        ? 'error'
+        : 'ready';
+  const visibleConnectionHealth =
+    desktopClient.available && connectionQuery.data
+      ? connectionQuery.data
+      : !desktopClient.available
+        ? previewConnectionHealth
+        : null;
+  const selectedProviderConnection =
+    visibleConnectionHealth?.providers.find((item) => item.isSelected) ?? null;
+  const selectedProviderSummary: ConnectionSummaryViewModel =
+    connectionRailState === 'loading' || connectionRailState === 'error'
+      ? getPendingConnectionSummary({
+          railState: connectionRailState,
+          target: 'provider',
+        })
+      : selectedProviderConnection
+        ? {
+            title: `${selectedProviderConnection.label} · ${visibleConnectionHealth.selectedModel}`,
+            statusClassName: getConnectionBadgeClass(selectedProviderConnection.status.state),
+            statusLabel: selectedProviderConnection.status.label,
+            detail: selectedProviderConnection.status.summary,
+            guidance: selectedProviderConnection.status.guidance,
+            meta: getConnectionMetaLabel(selectedProviderConnection),
+          }
+        : getPendingConnectionSummary({
+            railState: 'error',
+            target: 'provider',
+          });
+  const localEngineSummary: ConnectionSummaryViewModel =
+    connectionRailState === 'loading' || connectionRailState === 'error'
+      ? getPendingConnectionSummary({
+          railState: connectionRailState,
+          target: 'localEngine',
+        })
+      : visibleConnectionHealth
+        ? {
+            title: visibleConnectionHealth.localEngine.label,
+            statusClassName: getConnectionBadgeClass(visibleConnectionHealth.localEngine.status.state),
+            statusLabel: visibleConnectionHealth.localEngine.status.label,
+            detail: visibleConnectionHealth.localEngine.status.summary,
+            guidance: visibleConnectionHealth.localEngine.status.guidance,
+            meta: getConnectionMetaLabel(visibleConnectionHealth.localEngine),
+            warnings: visibleConnectionHealth.localEngine.warnings,
+          }
+        : getPendingConnectionSummary({
+            railState: 'error',
+            target: 'localEngine',
+          });
+  const showConnectionControls = Boolean(visibleConnectionHealth) && connectionRailState !== 'error';
+
+  function setConnectionMutationState(
+    provider: ProviderId,
+    state: ConnectionMutationState,
+  ) {
+    setConnectionMutationStates((current) => ({
+      ...current,
+      [provider]: state,
+    }));
+  }
 
   function handleSelection<TKey extends keyof AppSettings>(
     key: TKey,
@@ -130,6 +465,96 @@ export function SettingsRoute() {
     void updateSettings({
       [key]: value,
     } as Partial<AppSettings>);
+  }
+
+  async function refreshConnectionHealth() {
+    if (!desktopClient.available) {
+      return;
+    }
+
+    await queryCache.fetchQuery(connectionDescriptor);
+  }
+
+  async function handleSaveApiKey(
+    provider: ProviderId,
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const apiKey = String(formData.get('apiKey') ?? '').trim();
+    const providerLabel =
+      visibleConnectionHealth?.providers.find((item) => item.provider === provider)?.label ??
+      provider;
+
+    if (!apiKey) {
+      setConnectionMutationState(provider, {
+        status: 'error',
+        message: settingsConnectionsCopy.emptyInputMessage,
+      });
+      return;
+    }
+
+    setConnectionMutationState(provider, {
+      status: 'saving',
+      message: null,
+    });
+
+    try {
+      await desktopClient.commands.saveApiKey({
+        provider,
+        apiKey,
+      });
+      form.reset();
+      setConnectionMutationState(provider, {
+        status: 'success',
+        message: getProviderMutationSuccessMessage({
+          provider,
+          providerLabel,
+          action: 'save',
+        }),
+      });
+      await refreshConnectionHealth();
+    } catch {
+      setConnectionMutationState(provider, {
+        status: 'error',
+        message: settingsConnectionsCopy.saveError,
+      });
+    }
+  }
+
+  async function handleDeleteApiKey(
+    provider: ProviderId,
+    form: HTMLFormElement | null,
+  ) {
+    const providerLabel =
+      visibleConnectionHealth?.providers.find((item) => item.provider === provider)?.label ??
+      provider;
+
+    setConnectionMutationState(provider, {
+      status: 'saving',
+      message: null,
+    });
+
+    try {
+      await desktopClient.commands.deleteApiKey({
+        provider,
+      });
+      form?.reset();
+      setConnectionMutationState(provider, {
+        status: 'success',
+        message: getProviderMutationSuccessMessage({
+          provider,
+          providerLabel,
+          action: 'delete',
+        }),
+      });
+      await refreshConnectionHealth();
+    } catch {
+      setConnectionMutationState(provider, {
+        status: 'error',
+        message: settingsConnectionsCopy.deleteError,
+      });
+    }
   }
 
   return (
@@ -303,9 +728,76 @@ export function SettingsRoute() {
                 disabled={controlsDisabled}
                 options={advancedPreviewOptions}
                 onSelect={(value) => {
-                  handleSelection('advancedPromptPreview', value as AppSettings['advancedPromptPreview']);
+                  handleSelection(
+                    'advancedPromptPreview',
+                    value as AppSettings['advancedPromptPreview'],
+                  );
                 }}
               />
+            </article>
+
+            <article className="panel settings-group-card">
+              <div className="panel-header panel-header-stack">
+                <div>
+                  <span className="panel-kicker">{settingsConnectionsCopy.providerListKicker}</span>
+                  <h3>{settingsConnectionsCopy.title}</h3>
+                  <p>{settingsConnectionsCopy.providerListBody}</p>
+                </div>
+              </div>
+
+              {connectionLoadingWithoutData ? (
+                <div className="settings-inline-feedback">
+                  <strong>연결 상태를 확인하는 중입니다.</strong>
+                  <p>저장된 키와 로컬 엔진 상태를 차례대로 읽고 있습니다.</p>
+                </div>
+              ) : null}
+
+              {connectionErrorWithoutData ? (
+                <div className="settings-inline-feedback settings-inline-feedback-error">
+                  <div>
+                    <strong>{settingsConnectionsCopy.errorTitle}</strong>
+                    <p>{settingsConnectionsCopy.errorBody}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={() => {
+                      void refreshConnectionHealth();
+                    }}
+                  >
+                    {settingsConnectionsCopy.refreshLabel}
+                  </button>
+                </div>
+              ) : null}
+
+              {!desktopClient.available ? (
+                <div className="settings-inline-feedback">
+                  <strong>예시 연결 상태</strong>
+                  <p>{settingsConnectionsCopy.previewBody}</p>
+                </div>
+              ) : null}
+
+              {connectionRefreshing ? (
+                <div className="settings-inline-feedback">
+                  <strong>연결 상태를 다시 확인하고 있습니다.</strong>
+                  <p>현재 기본 모델 제공자와 로컬 엔진 상태를 최신 기준으로 갱신 중입니다.</p>
+                </div>
+              ) : null}
+
+              {showConnectionControls ? (
+                <div className="settings-provider-editor-list">
+                  {visibleConnectionHealth.providers.map((item) => (
+                    <ProviderKeyEditor
+                      key={item.provider}
+                      item={item}
+                      disabled={!desktopClient.available}
+                      mutationState={connectionMutationStates[item.provider]}
+                      onDelete={handleDeleteApiKey}
+                      onSave={handleSaveApiKey}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </article>
           </div>
 
@@ -313,28 +805,44 @@ export function SettingsRoute() {
             <article className="panel settings-rail-card">
               <div className="panel-header panel-header-stack">
                 <div>
-                  <span className="panel-kicker">API 키 맥락</span>
-                  <h3>{settingsSurfaceCopy.connectionsTitle}</h3>
-                  <p>{settingsSurfaceCopy.connectionsBody}</p>
+                  <span className="panel-kicker">{settingsConnectionsCopy.railKicker}</span>
+                  <h3>{settingsConnectionsCopy.title}</h3>
+                  <p>{settingsConnectionsCopy.body}</p>
                 </div>
+                <button
+                  type="button"
+                  className="soft-button"
+                  disabled={!desktopClient.available || connectionQuery.status === 'loading'}
+                  onClick={() => {
+                    void refreshConnectionHealth();
+                  }}
+                >
+                  {settingsConnectionsCopy.refreshLabel}
+                </button>
               </div>
 
-              <div className="settings-provider-list">
-                <div className="settings-provider-row">
-                  <strong>OpenAI</strong>
-                  <span className="badge badge-muted">연결 설정 대기</span>
-                </div>
-                <div className="settings-provider-row">
-                  <strong>Anthropic</strong>
-                  <span className="badge badge-muted">연결 설정 대기</span>
-                </div>
-                <div className="settings-provider-row">
-                  <strong>Google</strong>
-                  <span className="badge badge-muted">연결 설정 대기</span>
-                </div>
-              </div>
+              <div className="settings-connection-brief-grid">
+                <ConnectionSummaryCard
+                  kicker={settingsConnectionsCopy.selectedProviderKicker}
+                  title={selectedProviderSummary.title}
+                  statusClassName={selectedProviderSummary.statusClassName}
+                  statusLabel={selectedProviderSummary.statusLabel}
+                  detail={selectedProviderSummary.detail}
+                  guidance={selectedProviderSummary.guidance}
+                  meta={selectedProviderSummary.meta}
+                />
 
-              <span className="badge badge-primary">{settingsSurfaceCopy.apiKeyDeferredLabel}</span>
+                <ConnectionSummaryCard
+                  kicker={settingsConnectionsCopy.localEngineKicker}
+                  title={localEngineSummary.title}
+                  statusClassName={localEngineSummary.statusClassName}
+                  statusLabel={localEngineSummary.statusLabel}
+                  detail={localEngineSummary.detail}
+                  guidance={localEngineSummary.guidance}
+                  meta={localEngineSummary.meta}
+                  warnings={localEngineSummary.warnings}
+                />
+              </div>
             </article>
 
             <article className="panel settings-rail-card">

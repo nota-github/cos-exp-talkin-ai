@@ -86,6 +86,7 @@ function registerIpcHandlers() {
     }),
     historyInspectionService,
     projectService,
+    secretService,
     settingsService,
     translationAdapter,
     usageDashboardService,
