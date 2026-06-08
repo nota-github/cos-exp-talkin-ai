@@ -73,14 +73,50 @@ export type ChatFeedItem = {
   updatedAt: string;
 };
 
+export type ChatFeedMessage = {
+  messageId: string;
+  conversationId: string;
+  runId: string | null;
+  role: 'user' | 'assistant' | 'system';
+  contentKo: string;
+  createdAt: string;
+};
+
+export type ChatFeedRunSummary = {
+  runId: string;
+  status:
+    | 'queued'
+    | 'optimizing'
+    | 'optimized'
+    | 'cloud_pending'
+    | 'restoring'
+    | 'completed'
+    | 'failed';
+  stage:
+    | 'queued'
+    | 'optimizing'
+    | 'optimized'
+    | 'cloud_pending'
+    | 'restoring'
+    | 'completed'
+    | 'failed'
+    | null;
+  model: CloudModelId;
+  mode: OptimizationMode;
+};
+
 export type ChatFeedQuery = {
   conversationId?: string;
 };
 
 export type ChatFeedResult = {
   activeConversationId: string | null;
+  activeTaskId: string | null;
+  activeTaskTitle: string | null;
   recommendedPrompts: string[];
   items: ChatFeedItem[];
+  messages: ChatFeedMessage[];
+  activeRun: ChatFeedRunSummary | null;
 };
 
 export type WorkbenchPanel = {

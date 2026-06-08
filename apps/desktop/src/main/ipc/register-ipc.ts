@@ -3,7 +3,9 @@ import {
   ipcChannels,
   queryNames,
   type AppSettings,
+  type ChatFeedMessage,
   type BoardColumnsResult,
+  type ChatFeedRunSummary,
   type DesktopCommandName,
   type DesktopCommandRequest,
   type DesktopCommandResponse,
@@ -19,6 +21,7 @@ import {
   type UsageDashboardResult,
   type WorkbenchLayoutResult,
 } from '../../shared/ipc/contracts';
+import type { ChatHistoryService } from '../chat/index.ts';
 import {
   createInMemoryAppSettingsService,
   defaultAppSettings,
@@ -80,6 +83,7 @@ export type DesktopIpcBroadcaster = (channel: string, payload: unknown) => void;
 
 export type RegisterDesktopIpcOptions = {
   broadcast?: DesktopIpcBroadcaster;
+  chatHistoryService?: ChatHistoryService;
   commitMutation?: (
     commandName: DesktopCommandName,
     nextState: DesktopIpcState,
@@ -183,12 +187,31 @@ function createInitialState(): DesktopIpcState {
   const state: DesktopIpcState = {
     chatFeed: {
       activeConversationId: primaryTask.conversationId,
+      activeTaskId: primaryTask.taskId,
+      activeTaskTitle: primaryTask.title,
       recommendedPrompts: [
         '사업계획서 초안을 한국어로 구조화해줘',
         '긴 PDF 핵심만 7개 항목으로 요약해줘',
         '브랜드 카피를 더 또렷한 문장으로 다듬어줘',
       ],
       items: [],
+      messages: [
+        {
+          messageId: 'msg-001',
+          conversationId: primaryTask.conversationId,
+          runId: 'run-001',
+          role: 'user',
+          contentKo: '시장 진입 전략이 보이도록 사업계획서 초안을 목차 중심으로 정리해줘.',
+          createdAt: '2026-06-08T01:10:00.000Z',
+        },
+      ],
+      activeRun: {
+        runId: 'run-001',
+        status: 'queued',
+        stage: 'queued',
+        model: primaryTask.model,
+        mode: primaryTask.mode,
+      },
     },
     workbenchLayout: {
       layoutId: 'layout-primary',
@@ -340,6 +363,87 @@ function sortTasksForChatFeed(tasks: Record<string, InternalTaskRecord>) {
     }));
 }
 
+function stageSubmittedPromptInState(
+  draftState: DesktopIpcState,
+  request: DesktopCommandRequest<'submitPrompt'>,
+  ids: {
+    taskId: string;
+    conversationId: string;
+    messageId: string;
+    runId: string;
+  },
+) {
+  const projectId = request.projectId ?? 'project-001';
+  const project = ensureProject(draftState, projectId);
+  const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
+  const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
+  const tokenOptimized = Math.max(Math.floor(tokenBaseline * 0.61), 170);
+  const savingsRate = Math.round((1 - tokenOptimized / tokenBaseline) * 100);
+  const nextMessage: ChatFeedMessage = {
+    messageId: ids.messageId,
+    conversationId: ids.conversationId,
+    runId: ids.runId,
+    role: 'user',
+    contentKo: request.promptKo,
+    createdAt: nowIso(),
+  };
+  const nextRun: ChatFeedRunSummary = {
+    runId: ids.runId,
+    status: 'queued',
+    stage: 'queued',
+    model: request.selectedModel,
+    mode: request.optimizationMode,
+  };
+
+  draftState.tasks[ids.taskId] = {
+    taskId: ids.taskId,
+    conversationId: ids.conversationId,
+    title,
+    preview: request.promptKo,
+    projectId,
+    projectName: project.name,
+    status: 'planning',
+    model: request.selectedModel,
+    mode: request.optimizationMode,
+    savingsRate,
+    lastActivity: '방금',
+    toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
+  };
+
+  project.tasks.unshift({
+    taskId: ids.taskId,
+    title,
+    status: 'planning',
+  });
+
+  draftState.chatFeed.activeConversationId = ids.conversationId;
+  draftState.chatFeed.activeTaskId = ids.taskId;
+  draftState.chatFeed.activeTaskTitle = title;
+  draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
+  draftState.chatFeed.messages = [nextMessage];
+  draftState.chatFeed.activeRun = nextRun;
+  draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
+
+  draftState.historyEntries[ids.runId] = {
+    runId: ids.runId,
+    taskId: ids.taskId,
+    promptKo: request.promptKo,
+    optimizedPromptEn:
+      'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
+    restoredResponseKo:
+      '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
+    baselineTokens: tokenBaseline,
+    optimizedTokens: tokenOptimized,
+    savingsRate,
+    provider: request.selectedModel,
+  };
+
+  draftState.usageDashboards.month.totals.baselineTokens += tokenBaseline;
+  draftState.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
+  draftState.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
+  draftState.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
+}
+
 function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardColumnsResult {
   return {
     columns: (Object.keys(boardColumnTitles) as TaskStatus[]).map((status) => ({
@@ -414,6 +518,7 @@ function emitInvalidation(
 
 export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {}): DesktopIpcService {
   let state = clone(options.state ?? createInitialState());
+  const chatHistoryService = options.chatHistoryService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
 
   async function resolvePreparedMutationResult<TResult>(
@@ -447,67 +552,69 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   const commands: CommandHandlerMap = {
     submitPrompt: async (request) =>
       commitCommandMutation('submitPrompt', async (draftState) => {
+        if (chatHistoryService) {
+          draftState.nextIds.task += 1;
+          draftState.nextIds.conversation += 1;
+          draftState.nextIds.message += 1;
+          draftState.nextIds.run += 1;
+
+          return {
+            commit: async () => {
+              const result = await chatHistoryService.submitPrompt(request);
+              stageSubmittedPromptInState(draftState, request, result);
+
+              return result;
+            },
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'task',
+                ids: [],
+              },
+              {
+                kind: 'entity',
+                entity: 'conversation',
+                ids: [],
+              },
+              {
+                kind: 'entity',
+                entity: 'run',
+                ids: [],
+              },
+              {
+                kind: 'projection',
+                projection: 'chatFeed',
+              },
+              {
+                kind: 'projection',
+                projection: 'historyEntry',
+              },
+              {
+                kind: 'projection',
+                projection: 'usageDashboard',
+                keys: ['month', 'all_time'],
+              },
+            ],
+          };
+        }
+
         const taskId = `task-${String(draftState.nextIds.task).padStart(3, '0')}`;
         const conversationId =
           request.conversationId ??
           `conv-${String(draftState.nextIds.conversation).padStart(3, '0')}`;
         const messageId = `msg-${String(draftState.nextIds.message).padStart(3, '0')}`;
         const runId = `run-${String(draftState.nextIds.run).padStart(3, '0')}`;
-        const projectId = request.projectId ?? 'project-001';
-        const project = ensureProject(draftState, projectId);
-        const title = request.promptKo.slice(0, 24) || '새 한국어 작업';
-        const tokenBaseline = Math.max(request.promptKo.length * 3, 280);
-        const tokenOptimized = Math.max(Math.floor(tokenBaseline * 0.61), 170);
-        const savingsRate = Math.round((1 - tokenOptimized / tokenBaseline) * 100);
 
         draftState.nextIds.task += 1;
         draftState.nextIds.conversation += 1;
         draftState.nextIds.message += 1;
         draftState.nextIds.run += 1;
-
-        draftState.tasks[taskId] = {
+        stageSubmittedPromptInState(draftState, request, {
           taskId,
           conversationId,
-          title,
-          preview: request.promptKo,
-          projectId,
-          projectName: project.name,
-          status: 'planning',
-          model: request.selectedModel,
-          mode: request.optimizationMode,
-          savingsRate,
-          lastActivity: '방금',
-          toolSummary: `${request.selectedModel} · ${request.optimizationMode}`,
-        };
-
-        project.tasks.unshift({
-          taskId,
-          title,
-          status: 'planning',
-        });
-
-        draftState.chatFeed.activeConversationId = conversationId;
-        draftState.chatFeed.items = sortTasksForChatFeed(draftState.tasks);
-        draftState.boardColumns = rebuildBoardColumns(draftState.tasks);
-
-        draftState.historyEntries[runId] = {
+          messageId,
           runId,
-          taskId,
-          promptKo: request.promptKo,
-          optimizedPromptEn:
-            'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
-          restoredResponseKo:
-            '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
-          baselineTokens: tokenBaseline,
-          optimizedTokens: tokenOptimized,
-          savingsRate,
-          provider: request.selectedModel,
-        };
-
-        draftState.usageDashboards.month.totals.baselineTokens += tokenBaseline;
-        draftState.usageDashboards.month.totals.optimizedTokens += tokenOptimized;
-        draftState.usageDashboards.all_time.totals.baselineTokens += tokenBaseline;
-        draftState.usageDashboards.all_time.totals.optimizedTokens += tokenOptimized;
+        });
 
         return {
           result: {
@@ -693,10 +800,13 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   };
 
   const queries: QueryHandlerMap = {
-    getChatFeed: async (request) => ({
-      ...clone(state.chatFeed),
-      activeConversationId: request.conversationId ?? state.chatFeed.activeConversationId,
-    }),
+    getChatFeed: async (request) =>
+      chatHistoryService
+        ? chatHistoryService.getChatFeed(request)
+        : {
+            ...clone(state.chatFeed),
+            activeConversationId: request.conversationId ?? state.chatFeed.activeConversationId,
+          },
     getWorkbenchLayout: async () => clone(state.workbenchLayout),
     getBoardColumns: async () => clone(state.boardColumns),
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),

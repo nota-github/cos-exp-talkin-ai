@@ -507,6 +507,8 @@ button {
   max-width: 78%;
   padding: 16px 18px;
   border-radius: 22px;
+  display: grid;
+  gap: 10px;
 }
 
 .bubble-full {
@@ -522,6 +524,10 @@ button {
   background: rgba(55, 201, 171, 0.12);
 }
 
+.bubble-pending {
+  border: 1px dashed rgba(13, 124, 103, 0.28);
+}
+
 .bubble-history {
   background: rgba(15, 39, 68, 0.04);
 }
@@ -533,6 +539,17 @@ button {
   font-size: 0.84rem;
   font-weight: 700;
   color: var(--blue-deep);
+}
+
+.bubble p {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-meta {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0d7c67;
 }
 
 .composer {

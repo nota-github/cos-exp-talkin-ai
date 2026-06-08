@@ -1,8 +1,23 @@
-import type { CloudModelId, OptimizationMode } from '../../shared/ipc/contracts';
+import type {
+  ChatFeedMessage,
+  CloudModelId,
+  OptimizationMode,
+  SubmitPromptCommand,
+  SubmitPromptResult,
+} from '../../shared/ipc/contracts';
 
 export type ChatSubmitState = {
   status: 'idle' | 'submitting' | 'success' | 'error';
   message: string | null;
+};
+
+export type PendingChatSubmission = ChatFeedMessage;
+
+export type ChatSubmitOutcome = {
+  activeStarterId: ChatStarterCard['id'] | null;
+  pendingSubmission: PendingChatSubmission | null;
+  promptDraft: string;
+  submitState: ChatSubmitState;
 };
 
 export type ChatStarterCard = {
@@ -39,6 +54,13 @@ export const chatSurfaceCopy = {
   metaBody: '사용 모델, 지연 시간, 절감률은 응답 아래 작은 메타 줄로 이어집니다.',
   previewModeBody: '브라우저 미리보기에서는 입력 shell만 확인할 수 있고 실제 전송은 데스크탑 셸에서 활성화됩니다.',
   primaryCta: '한국어 요청 시작하기',
+  submitSavingMessage: '한국어 요청을 먼저 로컬 인박스에 안전하게 저장하고 있습니다.',
+  submitSavedMessage: '한국어 요청이 로컬 인박스에 저장되었습니다. 대화 피드에서 바로 이어갈 수 있습니다.',
+  submitFailureMessage:
+    '로컬 저장에 실패했습니다. 입력한 내용은 그대로 남아 있으니 다시 시도해 주세요.',
+  conversationReadyTitle: '저장된 대화',
+  queuedRunLabel: '로컬 저장 완료 · 실행 대기',
+  savingRunLabel: '로컬 저장 중',
 } as const;
 
 export const chatStarterCards: ChatStarterCard[] = [
@@ -85,6 +107,27 @@ export function createIdleChatSubmitState(): ChatSubmitState {
   };
 }
 
+export function createSubmittingChatSubmitState(): ChatSubmitState {
+  return {
+    status: 'submitting',
+    message: chatSurfaceCopy.submitSavingMessage,
+  };
+}
+
+export function createSuccessfulChatSubmitState(): ChatSubmitState {
+  return {
+    status: 'success',
+    message: chatSurfaceCopy.submitSavedMessage,
+  };
+}
+
+export function createFailedChatSubmitState(): ChatSubmitState {
+  return {
+    status: 'error',
+    message: chatSurfaceCopy.submitFailureMessage,
+  };
+}
+
 export function createStarterDraftSelection(card: Pick<ChatStarterCard, 'id' | 'prompt'>) {
   return {
     activeStarterId: card.id,
@@ -96,4 +139,68 @@ export function createStarterDraftSelection(card: Pick<ChatStarterCard, 'id' | '
 export function getChatDraftPreview(promptDraft: string) {
   const trimmed = promptDraft.trim();
   return trimmed.length > 0 ? trimmed : chatSurfaceCopy.draftPreviewEmpty;
+}
+
+export function mergeVisibleConversationMessages(
+  persistedMessages: ChatFeedMessage[],
+  pendingSubmission: PendingChatSubmission | null,
+) {
+  if (!pendingSubmission) {
+    return persistedMessages;
+  }
+
+  if (persistedMessages.some((message) => message.messageId === pendingSubmission.messageId)) {
+    return persistedMessages;
+  }
+
+  return [...persistedMessages, pendingSubmission];
+}
+
+export async function submitChatPromptDraft(options: {
+  activeStarterId: ChatStarterCard['id'] | null;
+  now?: () => string;
+  optimizationMode: OptimizationMode;
+  promptDraft: string;
+  selectedModel: CloudModelId;
+  submitPrompt: (request: SubmitPromptCommand) => Promise<SubmitPromptResult>;
+}): Promise<ChatSubmitOutcome> {
+  const promptKo = options.promptDraft;
+
+  if (promptKo.trim().length === 0) {
+    return {
+      activeStarterId: options.activeStarterId,
+      pendingSubmission: null,
+      promptDraft: options.promptDraft,
+      submitState: createIdleChatSubmitState(),
+    };
+  }
+
+  try {
+    const result = await options.submitPrompt({
+      promptKo,
+      selectedModel: options.selectedModel,
+      optimizationMode: options.optimizationMode,
+    });
+
+    return {
+      activeStarterId: null,
+      pendingSubmission: {
+        messageId: result.messageId,
+        conversationId: result.conversationId,
+        runId: result.runId,
+        role: 'user',
+        contentKo: promptKo,
+        createdAt: options.now?.() ?? new Date().toISOString(),
+      },
+      promptDraft: '',
+      submitState: createSuccessfulChatSubmitState(),
+    };
+  } catch {
+    return {
+      activeStarterId: options.activeStarterId,
+      pendingSubmission: null,
+      promptDraft: options.promptDraft,
+      submitState: createFailedChatSubmitState(),
+    };
+  }
 }
