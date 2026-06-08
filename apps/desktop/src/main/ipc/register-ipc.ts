@@ -27,6 +27,7 @@ import {
   defaultAppSettings,
   type AppSettingsService,
 } from '../settings/index.ts';
+import type { TranslationMcpAdapter } from '../translation/index.ts';
 
 type InternalTaskRecord = {
   taskId: string;
@@ -90,11 +91,13 @@ export type RegisterDesktopIpcOptions = {
   ) => Promise<void> | void;
   state?: DesktopIpcState;
   settingsService?: AppSettingsService;
+  translationAdapter?: TranslationMcpAdapter;
 };
 
 export type DesktopIpcService = {
   commands: CommandHandlerMap;
   queries: QueryHandlerMap;
+  translationAdapter: TranslationMcpAdapter | null;
 };
 
 type PreparedMutationResult<TResult> =
@@ -520,6 +523,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   let state = clone(options.state ?? createInitialState());
   const chatHistoryService = options.chatHistoryService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
+  const translationAdapter = options.translationAdapter ?? null;
 
   async function resolvePreparedMutationResult<TResult>(
     outcome: PreparedMutationResult<TResult>,
@@ -818,6 +822,7 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
   return {
     commands,
     queries,
+    translationAdapter,
   };
 }
 
