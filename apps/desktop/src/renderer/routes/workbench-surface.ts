@@ -98,36 +98,41 @@ const previewTaskSeeds: PreviewTaskSeed[] = [
 ];
 
 export const workbenchSlotLabels: Record<PanelSlot, string> = {
-  'north-west': 'Panel A',
-  'north-east': 'Panel B',
-  'south-west': 'Panel C',
-  'south-east': 'Panel D',
+  'north-west': '패널 A',
+  'north-east': '패널 B',
+  'south-west': '패널 C',
+  'south-east': '패널 D',
 };
 
 export const workbenchSurfaceCopy = {
   headline: '같은 작업을 그대로 이어 붙이는 멀티채팅 작업대',
   intro:
-    '최근 작업 레일에서 방금 보던 task를 고르고, 오른쪽 패널에서 같은 대화를 이어가세요. 새 대화를 복제하지 않고 기존 작업을 재사용합니다.',
+    '최근 작업 레일에서 방금 보던 작업을 고르고, 오른쪽 패널에서 같은 대화를 이어가세요. 새 대화를 복제하지 않고 기존 흐름을 그대로 재사용합니다.',
   railTitle: '최근 이어보기',
-  railDescription: '최근 활동 순으로 정렬된 task를 골라 오른쪽 패널에 배치하거나, 이미 열려 있다면 그 위치로 바로 이동합니다.',
+  railDescription:
+    '최근 활동 순으로 정렬된 작업을 골라 오른쪽 패널에 배치하거나, 이미 열려 있다면 그 위치로 바로 이동합니다.',
   railLoadingTitle: '최근 작업을 정리하고 있습니다',
-  railLoadingBody: '작업대 레일과 패널 상태를 같은 source of truth에서 다시 불러오는 중입니다.',
+  railLoadingBody: '작업대 레일과 패널 상태를 한곳에 저장된 최신 기준으로 다시 불러오는 중입니다.',
+  railSyncWarningTitle: '마지막으로 동기화된 작업대를 보여주고 있습니다',
+  railSyncWarningBody:
+    '최근 재조회가 실패해 마지막으로 확인된 레일과 패널을 유지했습니다. 같은 작업은 계속 볼 수 있지만, 최신 상태를 다시 확인해 주세요.',
+  railSyncWarningAction: '작업대 다시 동기화',
   railErrorTitle: '작업대를 불러오지 못했습니다',
   railErrorBody: '채팅에서 다시 이어 열거나 잠시 후 작업대를 새로 열어 보세요.',
-  railEmptyTitle: '아직 열린 task가 없습니다',
-  railEmptyBody: '먼저 채팅에서 작업을 만들거나 아래 빈 패널로 새 대화를 시작해 보세요.',
+  railEmptyTitle: '아직 열린 작업이 없습니다',
+  railEmptyBody: '먼저 채팅에서 작업을 만들거나 아래 빈 패널에서 새 대화를 시작해 보세요.',
   stageTitle: '활성 패널',
   stageDescription:
-    '왼쪽 레일은 어떤 task를 다룰지 고르는 곳이고, 오른쪽 패널은 실제 대화와 상태를 이어가는 작업 공간입니다.',
+    '왼쪽 레일은 어떤 작업을 이어갈지 고르는 곳이고, 오른쪽 패널은 실제 대화와 상태를 이어가는 작업 공간입니다.',
   panelInputPlaceholder:
-    '같은 작업에 이어 붙일 추가 한국어 지시를 입력하세요. 원문은 이 task 대화 히스토리에 그대로 남습니다.',
-  panelSubmitSavingMessage: '같은 task에 추가 지시를 저장하고 있습니다.',
-  panelSubmitSavedMessage: '같은 task에 추가 지시가 저장되었습니다.',
+    '같은 작업에 이어 붙일 추가 한국어 지시를 입력하세요. 원문은 이 작업 대화 기록에 그대로 남습니다.',
+  panelSubmitSavingMessage: '같은 작업에 추가 지시를 저장하고 있습니다.',
+  panelSubmitSavedMessage: '같은 작업에 추가 지시가 저장되었습니다.',
   panelSubmitErrorMessage:
     '추가 지시를 저장하지 못했습니다. 작성 중이던 한국어 초안은 그대로 남아 있습니다.',
   panelActivityTitle: '최근 활동',
   panelComposerTitle: '추가 지시',
-  panelComposerBody: '이 패널 안에서 같은 task와 conversation을 그대로 이어갑니다.',
+  panelComposerBody: '이 패널 안에서 같은 작업과 대화 흐름을 그대로 이어갑니다.',
   panelSubmitAction: '같은 작업 이어서 보내기',
 } as const;
 
@@ -379,8 +384,8 @@ function createPreviewEmptyPanel(slot: PanelSlot): WorkbenchPanel {
     'south-east': '빈 슬롯을 유지해도 됩니다',
   };
   const noteBySlot: Record<PanelSlot, string> = {
-    'north-west': '최근 작업 레일에서 원하는 task를 선택해 독립 패널로 여세요',
-    'north-east': '새 채팅이나 최근 task를 이 슬롯에 배치할 수 있습니다',
+    'north-west': '최근 작업 레일에서 원하는 작업을 선택해 독립 패널로 여세요',
+    'north-east': '새 채팅이나 최근 작업을 이 슬롯에 배치할 수 있습니다',
     'south-west': '리서치, 초안, 검토 작업을 서로 다른 패널로 분리하세요',
     'south-east': '필요할 때 바로 이어 붙일 수 있도록 비워 둔 작업 공간입니다',
   };
@@ -412,6 +417,7 @@ export function getWorkbenchSurfaceState(options: {
 }) {
   const showLoadingState = options.desktopAvailable && options.queryStatus === 'loading' && !options.layout;
   const showErrorState = options.desktopAvailable && options.queryStatus === 'error' && !options.layout;
+  const showSyncWarningState = options.desktopAvailable && options.queryStatus === 'error' && !!options.layout;
   const resolvedLayout = options.desktopAvailable ? options.layout : options.previewLayout;
   const recentTasks = resolvedLayout?.recentTasks ?? [];
   const panels = resolvedLayout?.panels ?? [];
@@ -429,18 +435,23 @@ export function getWorkbenchSurfaceState(options: {
     activeTaskId,
     showLoadingState,
     showErrorState,
+    showSyncWarningState,
     showInteractiveContent,
     railCountLabel: showLoadingState
       ? '동기화 중'
-      : showErrorState
-        ? '불러오지 못함'
-        : `${recentTasks.length}개 task`,
+        : showErrorState
+          ? '불러오지 못함'
+        : showSyncWarningState
+          ? '최근 값 유지 중'
+        : `${recentTasks.length}개 작업`,
     stageBadgeLabel: showLoadingState
       ? '동기화 대기'
       : showErrorState
         ? '다시 시도 필요'
+        : showSyncWarningState
+          ? '재동기화 필요'
         : activeTaskId
-          ? '같은 task 이어서 작업 중'
+          ? '같은 작업 이어서 진행 중'
           : '선택 대기',
   };
 }
@@ -521,10 +532,10 @@ export function getWorkbenchPanelActivityItems(panel: WorkbenchPanel): Workbench
       label: getRunStatusLabel(latestRun),
       detail:
         latestRun.status === 'failed'
-          ? latestRun.failure?.message ?? '같은 task의 최근 실행이 안전하게 멈췄습니다.'
+          ? latestRun.failure?.message ?? '같은 작업의 최근 실행이 안전하게 멈췄습니다.'
           : latestRun.usage
             ? `${latestRun.usage.savingsRate}% 절감 · ${latestRun.usage.latencyMs}ms`
-            : '같은 task에서 최신 실행이 진행 중입니다.',
+            : '같은 작업에서 최신 실행이 진행 중입니다.',
       tone:
         latestRun.status === 'failed'
           ? 'error'

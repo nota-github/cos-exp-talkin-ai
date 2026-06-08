@@ -6,12 +6,14 @@ import test from 'node:test';
 import { createPersistentChatHistoryService } from '../src/main/chat/index.ts';
 import { createDesktopIpcService } from '../src/main/ipc/register-ipc.ts';
 import { openSqliteDatabase } from '../src/main/persistence/database.ts';
+import { getSafeDesktopErrorCopy } from '../src/renderer/lib/ipc/error-copy.ts';
 import {
   createWorkbenchComposerState,
   getWorkbenchSurfaceState,
   mergeWorkbenchPanelMessages,
   previewWorkbenchLayout,
   workbenchComposerReducer,
+  workbenchSurfaceCopy,
 } from '../src/renderer/routes/workbench-surface.ts';
 import { createPersistentWorkbenchService } from '../src/main/workbench/index.ts';
 
@@ -227,6 +229,82 @@ test('story-5.2:SCOPE-3 desktop error state with no workbench data does not fall
   assert.deepEqual(surfaceState.panels, []);
   assert.equal(surfaceState.railCountLabel, '불러오지 못함');
   assert.equal(surfaceState.stageBadgeLabel, '다시 시도 필요');
+});
+
+test('story-6.4:VAL-3 and story-6.4:AC-4 cached workbench data stays visible while surfacing an explicit sync warning', () => {
+  const surfaceState = getWorkbenchSurfaceState({
+    desktopAvailable: true,
+    queryStatus: 'error',
+    layout: previewWorkbenchLayout,
+    previewLayout: previewWorkbenchLayout,
+    activePanelSlot: previewWorkbenchLayout.activePanelSlot,
+  });
+
+  assert.equal(surfaceState.showLoadingState, false);
+  assert.equal(surfaceState.showErrorState, false);
+  assert.equal(surfaceState.showSyncWarningState, true);
+  assert.equal(surfaceState.showInteractiveContent, true);
+  assert.equal(surfaceState.recentTasks.length, previewWorkbenchLayout.recentTasks.length);
+  assert.equal(surfaceState.panels.length, previewWorkbenchLayout.panels.length);
+  assert.equal(surfaceState.railCountLabel, '최근 값 유지 중');
+  assert.equal(surfaceState.stageBadgeLabel, '재동기화 필요');
+  assert.match(workbenchRouteSource, /<span className="screen-kicker">작업대<\/span>/);
+  assert.match(workbenchRouteSource, /<span className="panel-kicker">최근 작업<\/span>/);
+  assert.match(workbenchRouteSource, /<span className="panel-kicker">불러오는 중<\/span>/);
+  assert.match(workbenchRouteSource, /<span className="panel-kicker">다시 확인 필요<\/span>/);
+  assert.match(workbenchRouteSource, /<span className="panel-kicker">비어 있음<\/span>/);
+  assert.match(workbenchRouteSource, /<span className="panel-kicker">대화 공간<\/span>/);
+  assert.match(workbenchRouteSource, /'같은 작업 이어짐'/);
+  assert.match(workbenchRouteSource, /surfaceState\.showSyncWarningState/);
+  assert.match(workbenchRouteSource, /refreshWorkbenchLayout/);
+  assert.match(workbenchRouteSource, /<QueryDiagnostic diagnostic=\{workbenchErrorCopy\.diagnostic\} \/>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="screen-kicker">Workbench<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Recent Tasks<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Loading<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Retry Safe<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Empty<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Workspace<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="panel-kicker">Conversation<\/span>/);
+  assert.doesNotMatch(workbenchRouteSource, /대화 ID \$\{panel\.conversation\.conversationId\}/);
+  assert.doesNotMatch(workbenchRouteSource, /<span className="badge badge-muted">\s*\{panel\.conversation\s*\?\s*`[^`]*conversationId/);
+  assert.doesNotMatch(workbenchRouteSource, /workbenchLayoutQuery\.error\.message/);
+  assert.equal(workbenchSurfaceCopy.railSyncWarningTitle, '마지막으로 동기화된 작업대를 보여주고 있습니다');
+  assert.equal(workbenchSurfaceCopy.railSyncWarningAction, '작업대 다시 동기화');
+  assert.equal(workbenchSurfaceCopy.intro.includes('task'), false);
+  assert.equal(workbenchSurfaceCopy.railDescription.includes('task'), false);
+  assert.equal(workbenchSurfaceCopy.railLoadingBody.includes('source of truth'), false);
+  assert.equal(workbenchSurfaceCopy.panelComposerBody.includes('conversation'), false);
+});
+
+test('story-6.4 patch maps technical desktop errors to Korean-first copy while keeping diagnostics non-primary', () => {
+  const bridgeUnavailable = getSafeDesktopErrorCopy(
+    new Error('Talkin AI desktop bridge is unavailable. Cannot access queries in this renderer context.'),
+    '기본 안내',
+  );
+  const unknownProject = getSafeDesktopErrorCopy(
+    new Error('Unknown project: project-001'),
+    '기본 안내',
+  );
+  const genericFailure = getSafeDesktopErrorCopy(
+    new Error('Temporary database mismatch'),
+    '기본 안내',
+  );
+
+  assert.equal(
+    bridgeUnavailable.primary,
+    '데스크탑 연결이 아직 준비되지 않았습니다. 앱 창을 다시 열거나 잠시 후 다시 시도해 주세요.',
+  );
+  assert.equal(
+    unknownProject.primary,
+    '방금 보던 작업 정보를 다시 찾지 못했습니다. 목록을 다시 불러와 최신 상태를 확인해 주세요.',
+  );
+  assert.equal(genericFailure.primary, '기본 안내');
+  assert.equal(
+    bridgeUnavailable.diagnostic,
+    'Talkin AI desktop bridge is unavailable. Cannot access queries in this renderer context.',
+  );
+  assert.equal(unknownProject.diagnostic, 'Unknown project: project-001');
+  assert.equal(genericFailure.diagnostic, 'Temporary database mismatch');
 });
 
 test('story-5.3:VAL-1, story-5.3:AC-1, and story-5.3:AC-2 workbench shows multiple open panels inside a wide 2x2 grid workspace', async () => {

@@ -17,6 +17,15 @@ import {
   DesktopQueryCache,
 } from '../src/renderer/lib/ipc/query-client.ts';
 import {
+  getBoardSurfaceState,
+  getProjectDetailSurfaceState,
+  getProjectHubSurfaceState,
+} from '../src/renderer/routes/projects-surface.ts';
+import {
+  getWorkbenchSurfaceState,
+  previewWorkbenchLayout,
+} from '../src/renderer/routes/workbench-surface.ts';
+import {
   ipcChannels,
   type DesktopInvalidationEvent,
 } from '../src/shared/ipc/contracts.ts';
@@ -259,6 +268,8 @@ test('story-6.4:VAL-1 and story-6.4:VAL-2 cross-screen mutations converge on the
       const board = queryCache.getSnapshot(boardQuery).data;
       const projectList = queryCache.getSnapshot(projectListQuery).data;
       const projectDetail = queryCache.getSnapshot(projectDetailQuery).data;
+      const sharedActivityAt =
+        chatFeed?.items.find((item) => item.taskId === submitResult.taskId)?.updatedAt ?? null;
       const boardCard = board?.columns.flatMap((column) => column.cards).find(
         (card) => card.taskId === submitResult.taskId,
       );
@@ -268,17 +279,22 @@ test('story-6.4:VAL-1 and story-6.4:VAL-2 cross-screen mutations converge on the
       const projectSummary = projectList?.projects.find((entry) => entry.projectId === project.projectId);
 
       return (
+        sharedActivityAt !== null &&
         chatFeed?.items.find((item) => item.taskId === submitResult.taskId)?.status === 'ai_review' &&
         boardCard?.status === 'ai_review' &&
         boardCard?.projectName === '사업계획서' &&
+        boardCard?.lastActivityAt === sharedActivityAt &&
         workbenchTask?.status === 'ai_review' &&
         workbenchTask?.projectName === '사업계획서' &&
+        workbenchTask?.lastActivityAt === sharedActivityAt &&
         workbenchPanel?.conversation?.messages.filter((message) => message.role === 'user').length === 2 &&
         workbenchPanel?.conversation?.messages.some(
           (message) => message.contentKo === '체크리스트 3개와 숫자 42를 유지해줘.',
         ) &&
         projectTask?.status === 'ai_review' &&
-        projectSummary?.taskCount === 1
+        projectTask?.lastActivityAt === sharedActivityAt &&
+        projectSummary?.taskCount === 1 &&
+        projectSummary?.lastActivityAt === sharedActivityAt
       );
     }, 'cross-screen projection convergence');
 
@@ -326,6 +342,7 @@ test('story-6.4:VAL-1 and story-6.4:VAL-2 cross-screen mutations converge on the
     assert.equal(boardCard.lastActivityAt, sharedActivityAt);
     assert.equal(workbenchTask.lastActivityAt, sharedActivityAt);
     assert.equal(projectTask.lastActivityAt, sharedActivityAt);
+    assert.equal(projectSummary.lastActivityAt, sharedActivityAt);
     assert.equal(
       workbenchPanel.conversation?.messages.some(
         (message) => message.contentKo === '체크리스트 3개와 숫자 42를 유지해줘.',
@@ -366,6 +383,227 @@ test('story-6.4:VAL-1 and story-6.4:VAL-2 cross-screen mutations converge on the
     );
   } finally {
     unsubscribe();
+    queryCache.dispose();
+    temp.cleanup();
+  }
+});
+
+test('story-6.4:VAL-3 and story-6.4:AC-4 invalidated cached projections expose retry-safe sync warnings when refetch fails', async () => {
+  const temp = createTempDatabase();
+  const runtime = createFakeIpcRuntime();
+  const now = createSequentialNow('2026-06-09T06:00:00.000Z');
+  const createId = createDeterministicIdFactory();
+
+  registerDesktopIpcHandlers(runtime.ipcMain, {
+    broadcast: runtime.broadcast,
+    boardService: createPersistentBoardService({
+      dbPath: temp.dbPath,
+      now,
+    }),
+    chatHistoryService: createPersistentChatHistoryService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+    projectService: createPersistentProjectService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+    workbenchService: createPersistentWorkbenchService({
+      dbPath: temp.dbPath,
+      now,
+      createId,
+    }),
+  });
+
+  const api = createTalkinAIDesktopApi(runtime.ipcRenderer, {
+    channel: 'desktop-shell',
+    platform: 'darwin',
+  });
+  const client = createRendererDesktopClient(api);
+  const queryCache = new DesktopQueryCache(client);
+  const failingQueryMessage = '재조회 중 동기화가 끊겼습니다.';
+  let failProjectionQueries = false;
+
+  for (const channel of [
+    ipcChannels.queries.getWorkbenchLayout,
+    ipcChannels.queries.getBoardColumns,
+    ipcChannels.queries.getProjectList,
+    ipcChannels.queries.getProjectDetail,
+  ]) {
+    const handler = runtime.handlers.get(channel);
+    assert.ok(handler, `No handler registered for ${channel}`);
+    runtime.handlers.set(channel, async (event, payload) => {
+      if (failProjectionQueries) {
+        throw new Error(failingQueryMessage);
+      }
+
+      return handler(event, payload);
+    });
+  }
+
+  try {
+    const project = await client.commands.createProject({
+      name: '운영 플로우',
+      description: 'cached sync warning 테스트용 프로젝트',
+      goal: 'refetch 실패 시에도 마지막 상태와 retry 경로가 보이는지 확인',
+    });
+    const submitResult = await client.commands.submitPrompt({
+      promptKo: '고객 공지 초안을 프로젝트 맥락과 함께 정리해줘.',
+      selectedModel: 'gpt-4.1',
+      optimizationMode: 'balanced',
+      projectId: project.projectId,
+    });
+    await client.commands.openInWorkbench({
+      taskId: submitResult.taskId,
+    });
+
+    const workbenchQuery = createDesktopQueryDescriptor('getWorkbenchLayout', {});
+    const boardQuery = createDesktopQueryDescriptor('getBoardColumns', {});
+    const projectListQuery = createDesktopQueryDescriptor('getProjectList', {});
+    const projectDetailQuery = createDesktopQueryDescriptor('getProjectDetail', {
+      projectId: project.projectId,
+    });
+
+    await Promise.all([
+      queryCache.fetchQuery(workbenchQuery),
+      queryCache.fetchQuery(boardQuery),
+      queryCache.fetchQuery(projectListQuery),
+      queryCache.fetchQuery(projectDetailQuery),
+    ]);
+
+    const initialBoardCard =
+      queryCache
+        .getSnapshot(boardQuery)
+        .data?.columns.flatMap((column) => column.cards)
+        .find((card) => card.taskId === submitResult.taskId) ?? null;
+    assert.equal(initialBoardCard?.status, 'planning');
+
+    failProjectionQueries = true;
+
+    await client.commands.moveTaskStatus({
+      taskId: submitResult.taskId,
+      status: 'ai_review',
+    });
+
+    await waitFor(() => {
+      return [workbenchQuery, boardQuery, projectListQuery, projectDetailQuery].every(
+        (descriptor) => queryCache.getSnapshot(descriptor).status === 'error',
+      );
+    }, 'projection refetch failures with cached data');
+
+    const workbenchSnapshot = queryCache.getSnapshot(workbenchQuery);
+    const boardSnapshot = queryCache.getSnapshot(boardQuery);
+    const projectListSnapshot = queryCache.getSnapshot(projectListQuery);
+    const projectDetailSnapshot = queryCache.getSnapshot(projectDetailQuery);
+
+    assert.equal(workbenchSnapshot.error?.message, failingQueryMessage);
+    assert.equal(boardSnapshot.error?.message, failingQueryMessage);
+    assert.equal(projectListSnapshot.error?.message, failingQueryMessage);
+    assert.equal(projectDetailSnapshot.error?.message, failingQueryMessage);
+    assert.ok(workbenchSnapshot.data);
+    assert.ok(boardSnapshot.data);
+    assert.ok(projectListSnapshot.data);
+    assert.ok(projectDetailSnapshot.data);
+
+    const staleBoardCard =
+      boardSnapshot.data?.columns.flatMap((column) => column.cards).find((card) => card.taskId === submitResult.taskId) ??
+      null;
+    assert.equal(staleBoardCard?.status, 'planning');
+
+    const workbenchSurfaceState = getWorkbenchSurfaceState({
+      desktopAvailable: true,
+      queryStatus: workbenchSnapshot.status,
+      layout: workbenchSnapshot.data,
+      previewLayout: previewWorkbenchLayout,
+      activePanelSlot: workbenchSnapshot.data?.activePanelSlot ?? null,
+    });
+    const boardSurfaceState = getBoardSurfaceState({
+      desktopAvailable: true,
+      queryStatus: boardSnapshot.status,
+      boardColumns: boardSnapshot.data,
+    });
+    const projectHubSurfaceState = getProjectHubSurfaceState({
+      desktopAvailable: true,
+      queryStatus: projectListSnapshot.status,
+      projectList: projectListSnapshot.data,
+    });
+    const projectDetailSurfaceState = getProjectDetailSurfaceState({
+      desktopAvailable: true,
+      queryStatus: projectDetailSnapshot.status,
+      projectDetail: projectDetailSnapshot.data,
+      hasSelectedProject: true,
+    });
+
+    assert.equal(workbenchSurfaceState.showErrorState, false);
+    assert.equal(workbenchSurfaceState.showSyncWarningState, true);
+    assert.equal(workbenchSurfaceState.showInteractiveContent, true);
+    assert.equal(boardSurfaceState.showErrorState, false);
+    assert.equal(boardSurfaceState.showSyncWarningState, true);
+    assert.equal(boardSurfaceState.showInteractiveContent, true);
+    assert.equal(projectHubSurfaceState.showErrorState, false);
+    assert.equal(projectHubSurfaceState.showSyncWarningState, true);
+    assert.equal(projectHubSurfaceState.showInteractiveContent, true);
+    assert.equal(projectDetailSurfaceState.showErrorState, false);
+    assert.equal(projectDetailSurfaceState.showSyncWarningState, true);
+    assert.equal(projectDetailSurfaceState.showInteractiveContent, true);
+
+    failProjectionQueries = false;
+
+    await Promise.all([
+      queryCache.fetchQuery(workbenchQuery),
+      queryCache.fetchQuery(boardQuery),
+      queryCache.fetchQuery(projectListQuery),
+      queryCache.fetchQuery(projectDetailQuery),
+    ]);
+
+    const refreshedBoardCard =
+      queryCache
+        .getSnapshot(boardQuery)
+        .data?.columns.flatMap((column) => column.cards)
+        .find((card) => card.taskId === submitResult.taskId) ?? null;
+    assert.equal(queryCache.getSnapshot(workbenchQuery).status, 'success');
+    assert.equal(queryCache.getSnapshot(boardQuery).status, 'success');
+    assert.equal(queryCache.getSnapshot(projectListQuery).status, 'success');
+    assert.equal(queryCache.getSnapshot(projectDetailQuery).status, 'success');
+    assert.equal(refreshedBoardCard?.status, 'ai_review');
+    assert.equal(
+      getWorkbenchSurfaceState({
+        desktopAvailable: true,
+        queryStatus: queryCache.getSnapshot(workbenchQuery).status,
+        layout: queryCache.getSnapshot(workbenchQuery).data,
+        previewLayout: previewWorkbenchLayout,
+        activePanelSlot: queryCache.getSnapshot(workbenchQuery).data?.activePanelSlot ?? null,
+      }).showSyncWarningState,
+      false,
+    );
+    assert.equal(
+      getBoardSurfaceState({
+        desktopAvailable: true,
+        queryStatus: queryCache.getSnapshot(boardQuery).status,
+        boardColumns: queryCache.getSnapshot(boardQuery).data,
+      }).showSyncWarningState,
+      false,
+    );
+    assert.equal(
+      getProjectHubSurfaceState({
+        desktopAvailable: true,
+        queryStatus: queryCache.getSnapshot(projectListQuery).status,
+        projectList: queryCache.getSnapshot(projectListQuery).data,
+      }).showSyncWarningState,
+      false,
+    );
+    assert.equal(
+      getProjectDetailSurfaceState({
+        desktopAvailable: true,
+        queryStatus: queryCache.getSnapshot(projectDetailQuery).status,
+        projectDetail: queryCache.getSnapshot(projectDetailQuery).data,
+        hasSelectedProject: true,
+      }).showSyncWarningState,
+      false,
+    );
+  } finally {
     queryCache.dispose();
     temp.cleanup();
   }

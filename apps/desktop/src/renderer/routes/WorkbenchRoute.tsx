@@ -5,6 +5,10 @@ import {
   getDesktopQueryCache,
   getRendererDesktopClient,
 } from '../lib/ipc/query-client';
+import {
+  getSafeDesktopActionErrorMessage,
+  getSafeDesktopErrorCopy,
+} from '../lib/ipc/error-copy';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
 import { getChatResponseMetadata, getChatRunFeedback } from './chat-surface';
 import {
@@ -54,6 +58,19 @@ function getPanelRunBadgeLabel(run: ChatFeedRunSummary | null) {
   }
 }
 
+function QueryDiagnostic({ diagnostic }: { diagnostic: string | null }) {
+  if (!diagnostic) {
+    return null;
+  }
+
+  return (
+    <details className="state-diagnostic">
+      <summary>세부 정보 보기</summary>
+      <p>{diagnostic}</p>
+    </details>
+  );
+}
+
 export function WorkbenchRoute() {
   const desktopClient = getRendererDesktopClient();
   const queryCache = getDesktopQueryCache();
@@ -81,6 +98,14 @@ export function WorkbenchRoute() {
     previewLayout,
     activePanelSlot,
   });
+  const workbenchErrorCopy = getSafeDesktopErrorCopy(
+    workbenchLayoutQuery.error,
+    workbenchSurfaceCopy.railErrorBody,
+  );
+  const workbenchSyncWarningCopy = getSafeDesktopErrorCopy(
+    workbenchLayoutQuery.error,
+    workbenchSurfaceCopy.railSyncWarningBody,
+  );
   const shouldPollActiveRun = surfaceState.panels.some((panel) =>
     hasInFlightWorkbenchRun(getLatestWorkbenchPanelRun(panel)),
   );
@@ -135,6 +160,10 @@ export function WorkbenchRoute() {
     }
   }, [composerState, surfaceState.panels]);
 
+  async function refreshWorkbenchLayout() {
+    await queryCache.fetchQuery(workbenchLayoutDescriptor);
+  }
+
   async function handleRecentTaskSelect(taskId: string) {
     setPlacementError(null);
 
@@ -149,9 +178,7 @@ export function WorkbenchRoute() {
       const result = await desktopClient.commands.openInWorkbench({ taskId });
       setActivePanelSlot(result.panelSlot);
     } catch (error) {
-      setPlacementError(
-        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
-      );
+      setPlacementError(getSafeDesktopActionErrorMessage(error, workbenchSurfaceCopy.railErrorBody));
     }
   }
 
@@ -177,9 +204,7 @@ export function WorkbenchRoute() {
       });
       setActivePanelSlot(result.panelSlot);
     } catch (error) {
-      setPlacementError(
-        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
-      );
+      setPlacementError(getSafeDesktopActionErrorMessage(error, workbenchSurfaceCopy.railErrorBody));
     } finally {
       setPendingPanelAction(null);
     }
@@ -202,9 +227,7 @@ export function WorkbenchRoute() {
       });
       setActivePanelSlot(result.activePanelSlot);
     } catch (error) {
-      setPlacementError(
-        error instanceof Error ? error.message : workbenchSurfaceCopy.railErrorBody,
-      );
+      setPlacementError(getSafeDesktopActionErrorMessage(error, workbenchSurfaceCopy.railErrorBody));
     } finally {
       setPendingPanelAction(null);
     }
@@ -252,10 +275,10 @@ export function WorkbenchRoute() {
       dispatchComposerAction({
         type: 'submit_failed',
         slot: panelSlot,
-        message:
-          error instanceof Error
-            ? error.message
-            : workbenchSurfaceCopy.panelSubmitErrorMessage,
+        message: getSafeDesktopActionErrorMessage(
+          error,
+          workbenchSurfaceCopy.panelSubmitErrorMessage,
+        ),
       });
     }
   }
@@ -264,7 +287,7 @@ export function WorkbenchRoute() {
     <section className="screen screen-workbench">
       <header className="screen-header compact-header">
         <div>
-          <span className="screen-kicker">Workbench</span>
+          <span className="screen-kicker">작업대</span>
           <h1>{workbenchSurfaceCopy.headline}</h1>
           <p>{workbenchSurfaceCopy.intro}</p>
         </div>
@@ -274,7 +297,7 @@ export function WorkbenchRoute() {
         <aside className="panel workbench-rail">
           <div className="panel-header panel-header-stack">
             <div>
-              <span className="panel-kicker">Recent Tasks</span>
+              <span className="panel-kicker">최근 작업</span>
               <h3>{workbenchSurfaceCopy.railTitle}</h3>
               <p>{workbenchSurfaceCopy.railDescription}</p>
             </div>
@@ -283,7 +306,7 @@ export function WorkbenchRoute() {
 
           {surfaceState.showLoadingState ? (
             <article className="workbench-state-card">
-              <span className="panel-kicker">Loading</span>
+              <span className="panel-kicker">불러오는 중</span>
               <strong>{workbenchSurfaceCopy.railLoadingTitle}</strong>
               <p>{workbenchSurfaceCopy.railLoadingBody}</p>
             </article>
@@ -291,12 +314,28 @@ export function WorkbenchRoute() {
 
           {surfaceState.showErrorState ? (
             <article className="workbench-state-card workbench-state-card-error">
-              <span className="panel-kicker">Retry Safe</span>
+              <span className="panel-kicker">다시 확인 필요</span>
               <strong>{workbenchSurfaceCopy.railErrorTitle}</strong>
-              <p>{workbenchSurfaceCopy.railErrorBody}</p>
-              {workbenchLayoutQuery.error ? (
-                <span className="badge badge-muted">{workbenchLayoutQuery.error.message}</span>
-              ) : null}
+              <p>{workbenchErrorCopy.primary}</p>
+              <QueryDiagnostic diagnostic={workbenchErrorCopy.diagnostic} />
+            </article>
+          ) : null}
+
+          {surfaceState.showSyncWarningState ? (
+            <article className="workbench-state-card workbench-state-card-error">
+              <span className="panel-kicker">재동기화 필요</span>
+              <strong>{workbenchSurfaceCopy.railSyncWarningTitle}</strong>
+              <p>{workbenchSyncWarningCopy.primary}</p>
+              <QueryDiagnostic diagnostic={workbenchSyncWarningCopy.diagnostic} />
+              <button
+                type="button"
+                className="soft-button"
+                onClick={() => {
+                  void refreshWorkbenchLayout();
+                }}
+              >
+                {workbenchSurfaceCopy.railSyncWarningAction}
+              </button>
             </article>
           ) : null}
 
@@ -304,7 +343,7 @@ export function WorkbenchRoute() {
             <div className="task-rail">
               {surfaceState.recentTasks.length === 0 ? (
                 <article className="workbench-state-card">
-                  <span className="panel-kicker">Empty</span>
+                  <span className="panel-kicker">비어 있음</span>
                   <strong>{workbenchSurfaceCopy.railEmptyTitle}</strong>
                   <p>{workbenchSurfaceCopy.railEmptyBody}</p>
                 </article>
@@ -348,7 +387,7 @@ export function WorkbenchRoute() {
           <article className="panel workbench-stage-card">
             <div className="panel-header">
               <div>
-                <span className="panel-kicker">Workspace</span>
+                <span className="panel-kicker">대화 공간</span>
                 <h3>{workbenchSurfaceCopy.stageTitle}</h3>
                 <p>{workbenchSurfaceCopy.stageDescription}</p>
               </div>
@@ -373,6 +412,22 @@ export function WorkbenchRoute() {
               <div className="workbench-inline-state workbench-inline-state-error">
                 <strong>{workbenchSurfaceCopy.railErrorTitle}</strong>
                 <p>{workbenchSurfaceCopy.railErrorBody}</p>
+              </div>
+            ) : null}
+
+            {surfaceState.showSyncWarningState ? (
+              <div className="workbench-inline-state workbench-inline-state-error">
+                <strong>{workbenchSurfaceCopy.railSyncWarningTitle}</strong>
+                <p>{workbenchSurfaceCopy.railSyncWarningBody}</p>
+                <button
+                  type="button"
+                  className="soft-button"
+                  onClick={() => {
+                    void refreshWorkbenchLayout();
+                  }}
+                >
+                  {workbenchSurfaceCopy.railSyncWarningAction}
+                </button>
               </div>
             ) : null}
           </article>
@@ -471,7 +526,7 @@ export function WorkbenchRoute() {
 
                         <section className="workbench-panel-feed">
                           <div className="workbench-panel-section-header">
-                            <span className="panel-kicker">Conversation</span>
+                            <span className="panel-kicker">대화 공간</span>
                             <span className="badge badge-muted">
                               {mergedMessages.length}개 메시지
                             </span>
@@ -527,9 +582,9 @@ export function WorkbenchRoute() {
                             </div>
                           ) : (
                             <article className="workbench-state-card">
-                              <span className="panel-kicker">Empty Conversation</span>
+                              <span className="panel-kicker">대화 대기</span>
                               <strong>아직 이어진 대화가 없습니다</strong>
-                              <p>채팅에서 시작한 요청이 이 패널에 연결되면 같은 task 대화가 여기에 쌓입니다.</p>
+                              <p>채팅에서 시작한 요청이 이 패널에 연결되면 같은 작업 대화가 여기에 쌓입니다.</p>
                             </article>
                           )}
                         </section>
@@ -561,14 +616,12 @@ export function WorkbenchRoute() {
                               <p>{workbenchSurfaceCopy.panelComposerBody}</p>
                             </div>
                             <span className="badge badge-muted">
-                              {panel.conversation
-                                ? `conversation ${panel.conversation.conversationId}`
-                                : '연결 대기'}
+                              {panel.conversation ? '같은 작업 이어짐' : '연결 대기'}
                             </span>
                           </div>
 
                           <textarea
-                            aria-label={`Workbench panel ${workbenchSlotLabels[panel.slot]} draft`}
+                            aria-label={`${workbenchSlotLabels[panel.slot]} 추가 지시 초안`}
                             className="composer-input workbench-panel-input"
                             value={panelComposerState.draft}
                             onChange={(event) => {
@@ -605,7 +658,7 @@ export function WorkbenchRoute() {
                         </section>
 
                         <div className="workbench-panel-toolbar">
-                          <span className="panel-kicker">Panel Actions</span>
+                          <span className="panel-kicker">패널 이동</span>
                           <div className="toolbar-group workbench-panel-actions">
                             {Object.entries(workbenchSlotLabels).map(([slot, label]) => {
                               const targetSlot = slot as PanelSlot;
@@ -652,7 +705,7 @@ export function WorkbenchRoute() {
                         </div>
 
                         <div className="workbench-panel-toolbar">
-                          <span className="panel-kicker">Empty Slot</span>
+                          <span className="panel-kicker">빈 슬롯</span>
                           <div className="toolbar-group workbench-panel-actions">
                             <button type="button" className="ghost-chip" disabled>
                               최근 작업 대기
