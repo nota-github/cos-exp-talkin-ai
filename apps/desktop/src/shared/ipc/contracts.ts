@@ -1,6 +1,9 @@
 export const commandNames = [
   'submitPrompt',
   'retryRun',
+  'createProject',
+  'updateProject',
+  'setTaskProject',
   'openInWorkbench',
   'moveWorkbenchPanel',
   'closeWorkbenchPanel',
@@ -12,6 +15,7 @@ export const queryNames = [
   'getChatFeed',
   'getWorkbenchLayout',
   'getBoardColumns',
+  'getProjectList',
   'getProjectDetail',
   'getUsageDashboard',
   'getHistoryFeed',
@@ -32,6 +36,9 @@ export const ipcChannels: {
   commands: {
     submitPrompt: 'talkin-ai:command:submitPrompt',
     retryRun: 'talkin-ai:command:retryRun',
+    createProject: 'talkin-ai:command:createProject',
+    updateProject: 'talkin-ai:command:updateProject',
+    setTaskProject: 'talkin-ai:command:setTaskProject',
     openInWorkbench: 'talkin-ai:command:openInWorkbench',
     moveWorkbenchPanel: 'talkin-ai:command:moveWorkbenchPanel',
     closeWorkbenchPanel: 'talkin-ai:command:closeWorkbenchPanel',
@@ -42,6 +49,7 @@ export const ipcChannels: {
     getChatFeed: 'talkin-ai:query:getChatFeed',
     getWorkbenchLayout: 'talkin-ai:query:getWorkbenchLayout',
     getBoardColumns: 'talkin-ai:query:getBoardColumns',
+    getProjectList: 'talkin-ai:query:getProjectList',
     getProjectDetail: 'talkin-ai:query:getProjectDetail',
     getUsageDashboard: 'talkin-ai:query:getUsageDashboard',
     getHistoryFeed: 'talkin-ai:query:getHistoryFeed',
@@ -219,6 +227,36 @@ export type BoardColumnsResult = {
   columns: BoardColumn[];
 };
 
+export type ProjectListQuery = EmptyPayload;
+
+export type ProjectListItem = {
+  projectId: string;
+  name: string;
+  description: string;
+  goal: string;
+  taskCount: number;
+  fileCount: number;
+  updatedAt: string;
+  lastActivityAt: string;
+  lastActivity: string;
+};
+
+export type ProjectLinkableTask = {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  projectId: string | null;
+  projectName: string | null;
+  sourceScreen: 'chat' | 'workbench' | 'projects' | 'kanban';
+  lastActivity: string;
+  lastActivityAt: string;
+};
+
+export type ProjectListResult = {
+  projects: ProjectListItem[];
+  recentTasks: ProjectLinkableTask[];
+};
+
 export type ProjectDetailQuery = {
   projectId: string;
 };
@@ -227,6 +265,8 @@ export type ProjectTaskSummary = {
   taskId: string;
   title: string;
   status: TaskStatus;
+  lastActivity: string;
+  lastActivityAt: string;
 };
 
 export type ProjectDetailResult = {
@@ -234,6 +274,7 @@ export type ProjectDetailResult = {
   name: string;
   description: string;
   goal: string;
+  updatedAt: string;
   files: string[];
   tasks: ProjectTaskSummary[];
 };
@@ -370,6 +411,39 @@ export type RetryRunResult = {
   acceptedStatus: 'queued';
 };
 
+export type CreateProjectCommand = {
+  name: string;
+  description: string;
+  goal: string;
+};
+
+export type CreateProjectResult = {
+  projectId: string;
+};
+
+export type UpdateProjectCommand = {
+  projectId: string;
+  name: string;
+  description: string;
+  goal: string;
+};
+
+export type UpdateProjectResult = {
+  projectId: string;
+  updatedAt: string;
+};
+
+export type SetTaskProjectCommand = {
+  taskId: string;
+  projectId: string | null;
+};
+
+export type SetTaskProjectResult = {
+  taskId: string;
+  projectId: string | null;
+  previousProjectId: string | null;
+};
+
 export type OpenInWorkbenchCommand = {
   taskId: string;
   panelSlot?: PanelSlot;
@@ -431,6 +505,18 @@ export type DesktopCommandDefinitions = {
     request: RetryRunCommand;
     response: RetryRunResult;
   };
+  createProject: {
+    request: CreateProjectCommand;
+    response: CreateProjectResult;
+  };
+  updateProject: {
+    request: UpdateProjectCommand;
+    response: UpdateProjectResult;
+  };
+  setTaskProject: {
+    request: SetTaskProjectCommand;
+    response: SetTaskProjectResult;
+  };
   openInWorkbench: {
     request: OpenInWorkbenchCommand;
     response: OpenInWorkbenchResult;
@@ -466,6 +552,10 @@ export type DesktopQueryDefinitions = {
     request: BoardColumnsQuery;
     response: BoardColumnsResult;
   };
+  getProjectList: {
+    request: ProjectListQuery;
+    response: ProjectListResult;
+  };
   getProjectDetail: {
     request: ProjectDetailQuery;
     response: ProjectDetailResult;
@@ -491,7 +581,7 @@ export type DesktopQueryDefinitions = {
 export type InvalidationTarget =
   | {
       kind: 'entity';
-      entity: 'task' | 'conversation' | 'run' | 'settings';
+      entity: 'task' | 'conversation' | 'run' | 'project' | 'settings';
       ids: string[];
     }
   | {
@@ -500,6 +590,7 @@ export type InvalidationTarget =
         | 'chatFeed'
         | 'workbenchLayout'
         | 'boardColumns'
+        | 'projectList'
         | 'projectDetail'
         | 'usageDashboard'
         | 'historyFeed'

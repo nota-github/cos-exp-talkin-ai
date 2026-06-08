@@ -25,8 +25,8 @@ export const navigationItems: NavigationItem[] = [
     id: 'projects',
     label: '프로젝트',
     path: '/projects',
-    eyebrow: '흐름 보드',
-    summary: '칸반 흐름과 장기 작업 묶음을 함께 관리',
+    eyebrow: '프로젝트 허브',
+    summary: '장기 작업 묶음과 보조 칸반 흐름을 함께 관리',
   },
   {
     id: 'usage',

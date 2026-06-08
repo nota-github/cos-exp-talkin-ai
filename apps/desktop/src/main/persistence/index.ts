@@ -45,6 +45,7 @@ export type {
   TaskSourceScreen,
   TaskUsageCategory,
   UpdateFileAssetInput,
+  UpdateProjectInput,
   UpdateTaskWorkflowInput,
   UsageRecord,
   WorkbenchLayoutDetail,

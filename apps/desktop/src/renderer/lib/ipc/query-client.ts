@@ -77,6 +77,8 @@ function getTargetKey<TName extends DesktopQueryName>(
   descriptor: DesktopQueryDescriptor<TName>,
 ): string | null {
   switch (descriptor.name) {
+    case 'getProjectList':
+      return 'project-list';
     case 'getProjectDetail':
       return descriptor.request.projectId;
     case 'getHistoryFeed':
@@ -100,6 +102,7 @@ function matchesProjectionTarget<TName extends DesktopQueryName>(
     chatFeed: 'getChatFeed',
     workbenchLayout: 'getWorkbenchLayout',
     boardColumns: 'getBoardColumns',
+    projectList: 'getProjectList',
     projectDetail: 'getProjectDetail',
     usageDashboard: 'getUsageDashboard',
     historyFeed: 'getHistoryFeed',
@@ -124,9 +127,10 @@ function matchesEntityTarget<TName extends DesktopQueryName>(
   target: EntityInvalidationTarget,
 ): boolean {
   const entityDependencies: Record<EntityInvalidationTarget['entity'], DesktopQueryName[]> = {
-    task: ['getChatFeed', 'getWorkbenchLayout', 'getBoardColumns', 'getProjectDetail'],
+    task: ['getChatFeed', 'getWorkbenchLayout', 'getBoardColumns', 'getProjectList', 'getProjectDetail'],
     conversation: ['getChatFeed', 'getWorkbenchLayout'],
     run: ['getWorkbenchLayout', 'getHistoryFeed', 'getHistoryEntry'],
+    project: ['getWorkbenchLayout', 'getBoardColumns', 'getProjectList', 'getProjectDetail'],
     settings: ['getSettings'],
   };
 

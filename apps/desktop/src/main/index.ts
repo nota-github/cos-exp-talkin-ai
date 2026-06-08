@@ -6,6 +6,7 @@ import { createPersistentHistoryInspectionService } from './history/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
 import { createPersistentSecretService } from './keychain/index.ts';
 import { createCloudInferenceGateway } from './providers/index.ts';
+import { createPersistentProjectService } from './projects/index.ts';
 import { createPersistentAppSettingsService } from './settings/index.ts';
 import {
   createStdioTranslationMcpRuntime,
@@ -35,6 +36,9 @@ function registerIpcHandlers() {
     dbPath,
   });
   const historyInspectionService = createPersistentHistoryInspectionService({
+    dbPath,
+  });
+  const projectService = createPersistentProjectService({
     dbPath,
   });
   const boardService = createPersistentBoardService({
@@ -81,6 +85,7 @@ function registerIpcHandlers() {
       optimizationStageOrchestrator,
     }),
     historyInspectionService,
+    projectService,
     settingsService,
     translationAdapter,
     usageDashboardService,
