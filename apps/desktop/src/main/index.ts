@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { join } from 'node:path';
+import { createPersistentBoardService } from './board/index.ts';
 import { createPersistentChatHistoryService } from './chat/index.ts';
 import { createPersistentHistoryInspectionService } from './history/index.ts';
 import { registerDesktopIpcHandlers } from './ipc/register-ipc';
@@ -34,6 +35,9 @@ function registerIpcHandlers() {
     dbPath,
   });
   const historyInspectionService = createPersistentHistoryInspectionService({
+    dbPath,
+  });
+  const boardService = createPersistentBoardService({
     dbPath,
   });
   const workbenchService = createPersistentWorkbenchService({
@@ -71,6 +75,7 @@ function registerIpcHandlers() {
         window.webContents.send(channel, payload);
       }
     },
+    boardService,
     chatHistoryService: createPersistentChatHistoryService({
       dbPath,
       optimizationStageOrchestrator,

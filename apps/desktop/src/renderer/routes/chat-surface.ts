@@ -555,6 +555,7 @@ export async function continueTaskInWorkbench(options: {
 
 export async function submitChatPromptDraft(options: {
   activeStarterId: ChatStarterCard['id'] | null;
+  conversationId?: string | null;
   now?: () => string;
   optimizationMode: OptimizationMode;
   promptDraft: string;
@@ -577,6 +578,7 @@ export async function submitChatPromptDraft(options: {
       promptKo,
       selectedModel: options.selectedModel,
       optimizationMode: options.optimizationMode,
+      conversationId: options.conversationId ?? undefined,
     });
 
     return {

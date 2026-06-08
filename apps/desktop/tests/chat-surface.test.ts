@@ -120,6 +120,36 @@ test('story-2.2:AC-4 and story-2.2:VAL-3 failed local save keeps the Korean draf
   });
 });
 
+test('story-5.5:SCOPE-3 deep-linked chat continuation keeps submitting into the selected conversation', async () => {
+  let observedConversationId: string | undefined;
+
+  await submitChatPromptDraft({
+    activeStarterId: null,
+    conversationId: 'conv-401',
+    optimizationMode: 'quality',
+    promptDraft: '이 대화에서 바로 이어서 수정해줘.',
+    selectedModel: 'claude-sonnet-4',
+    submitPrompt: async (request) => {
+      observedConversationId = request.conversationId;
+
+      return {
+        taskId: 'task-401',
+        conversationId: 'conv-401',
+        messageId: 'msg-401',
+        runId: 'run-401',
+        acceptedStatus: 'queued',
+      };
+    },
+  });
+
+  assert.equal(observedConversationId, 'conv-401');
+  assert.match(chatRouteSource, /useSearchParams/);
+  assert.match(
+    chatRouteSource,
+    /conversationId: chatFeedQuery\.data\?\.activeConversationId \?\? requestedConversationId/,
+  );
+});
+
 test('story-2.2:AC-5 and story-2.2:AC-6 source switches the stage from landing guide to conversation feed with preserved multiline bubbles', () => {
   assert.match(chatRouteSource, /conversationMessages\.map/);
   assert.match(chatRouteSource, /pendingDraftPreview/);

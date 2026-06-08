@@ -27,6 +27,7 @@ import {
   resolveWorkbenchPanelSlot,
   workbenchPanelSlots,
 } from '../../shared/ipc/workbench.ts';
+import type { BoardService } from '../board/index.ts';
 import type { ChatHistoryService } from '../chat/index.ts';
 import type { HistoryInspectionService } from '../history/index.ts';
 import {
@@ -101,6 +102,7 @@ export type DesktopIpcBroadcaster = (channel: string, payload: unknown) => void;
 
 export type RegisterDesktopIpcOptions = {
   broadcast?: DesktopIpcBroadcaster;
+  boardService?: BoardService;
   chatHistoryService?: ChatHistoryService;
   commitMutation?: (
     commandName: DesktopCommandName,
@@ -776,9 +778,12 @@ function rebuildBoardColumns(tasks: Record<string, InternalTaskRecord>): BoardCo
         .filter((task) => task.status === status)
         .map((task) => ({
           taskId: task.taskId,
+          conversationId: task.conversationId,
           title: task.title,
+          status: task.status,
           projectName: task.projectName,
           lastActivity: task.lastActivity,
+          lastActivityAt: task.lastActivityAt,
           toolSummary: task.toolSummary,
         })),
     })),
@@ -841,6 +846,7 @@ function emitInvalidation(
 
 export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {}): DesktopIpcService {
   let state = clone(options.state ?? createInitialState());
+  const boardService = options.boardService ?? null;
   const chatHistoryService = options.chatHistoryService ?? null;
   const historyInspectionService = options.historyInspectionService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
@@ -1237,6 +1243,23 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       }),
     moveTaskStatus: async (request) =>
       commitCommandMutation('moveTaskStatus', async (draftState) => {
+        if (boardService) {
+          return {
+            commit: async () => boardService.moveTaskStatus(request),
+            targets: [
+              {
+                kind: 'entity',
+                entity: 'task',
+                ids: [request.taskId],
+              },
+              {
+                kind: 'projection',
+                projection: 'boardColumns',
+              },
+            ],
+          };
+        }
+
         const task = ensureTask(draftState, request.taskId);
         const project = ensureProject(draftState, task.projectId);
 
@@ -1326,7 +1349,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       workbenchService
         ? workbenchService.getWorkbenchLayout(request)
         : buildWorkbenchLayoutFromState(state),
-    getBoardColumns: async () => clone(state.boardColumns),
+    getBoardColumns: async () =>
+      boardService
+        ? boardService.getBoardColumns({})
+        : clone(state.boardColumns),
     getProjectDetail: async (request) => clone(ensureProject(state, request.projectId)),
     getUsageDashboard: async (request) =>
       usageDashboardService

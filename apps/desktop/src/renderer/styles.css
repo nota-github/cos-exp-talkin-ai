@@ -305,7 +305,8 @@ button {
 .chat-layout,
 .chat-inbox-shell,
 .two-column-layout,
-.workbench-layout {
+.workbench-layout,
+.projects-workspace {
   display: grid;
   gap: 18px;
 }
@@ -325,6 +326,11 @@ button {
 
 .workbench-layout {
   grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.projects-workspace {
+  grid-template-columns: 320px minmax(0, 1fr);
+  align-items: start;
 }
 
 .panel {
@@ -393,9 +399,242 @@ button {
 .starter-rail,
 .conversation-stage,
 .workbench-rail,
-.workbench-stage {
+.workbench-stage,
+.board-stage,
+.board-overview {
   display: grid;
   gap: 18px;
+}
+
+.board-overview {
+  align-content: start;
+}
+
+.board-overview-stack,
+.board-column-body {
+  display: grid;
+  gap: 12px;
+}
+
+.board-overview-card,
+.board-column,
+.board-card,
+.board-placeholder,
+.board-feedback {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: 0 10px 32px rgba(31, 86, 151, 0.08);
+}
+
+.board-overview-card,
+.board-placeholder,
+.board-feedback {
+  padding: 18px;
+}
+
+.board-stage-header {
+  margin: 0;
+}
+
+.board-stage-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.board-feedback {
+  display: grid;
+  gap: 6px;
+}
+
+.board-feedback-success {
+  background: linear-gradient(180deg, rgba(55, 201, 171, 0.12) 0%, rgba(255, 255, 255, 0.96) 100%);
+}
+
+.board-feedback-error {
+  background: linear-gradient(180deg, rgba(255, 238, 238, 0.95) 0%, rgba(255, 255, 255, 0.96) 100%);
+}
+
+.board-stage-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.board-grid {
+  display: grid;
+  gap: 16px;
+  min-width: 1340px;
+  grid-template-columns: repeat(5, minmax(248px, 1fr));
+}
+
+.board-column {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(242, 248, 255, 0.84) 100%),
+    var(--panel);
+}
+
+.board-column-planning {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(246, 250, 255, 0.88) 100%),
+    var(--panel);
+}
+
+.board-column-in_progress {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(237, 247, 255, 0.92) 100%),
+    var(--panel);
+}
+
+.board-column-ai_review {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(233, 251, 247, 0.92) 100%),
+    var(--panel);
+}
+
+.board-column-human_review {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 251, 255, 0.92) 100%),
+    var(--panel);
+}
+
+.board-column-completed {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(232, 250, 246, 0.96) 100%),
+    var(--panel);
+}
+
+.board-column-header,
+.board-card-top,
+.board-card-meta,
+.board-card-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.board-column-copy,
+.board-column-empty p,
+.board-overview-card p,
+.board-placeholder p,
+.board-feedback p,
+.board-card-error {
+  margin: 0;
+  color: var(--muted);
+}
+
+.board-card {
+  position: relative;
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(55, 201, 171, 0.16), transparent 32%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(245, 249, 255, 0.9) 100%);
+}
+
+.board-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--blue) 0%, var(--mint) 100%);
+}
+
+.board-card-project,
+.board-card-meta,
+.board-status-control span,
+.board-column-copy {
+  font-size: 0.88rem;
+}
+
+.board-card-project {
+  color: var(--blue-deep);
+  font-weight: 700;
+}
+
+.board-card-meta {
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.board-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.board-status-badge-planning {
+  background: rgba(34, 118, 245, 0.1);
+  color: var(--blue-deep);
+}
+
+.board-status-badge-in_progress {
+  background: rgba(20, 80, 189, 0.14);
+  color: var(--blue-deep);
+}
+
+.board-status-badge-ai_review {
+  background: rgba(55, 201, 171, 0.14);
+  color: #0d7c67;
+}
+
+.board-status-badge-human_review {
+  background: rgba(17, 42, 74, 0.08);
+  color: var(--ink);
+}
+
+.board-status-badge-completed {
+  background: rgba(55, 201, 171, 0.18);
+  color: #0d7c67;
+}
+
+.board-status-control {
+  display: grid;
+  gap: 8px;
+}
+
+.board-status-select {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  padding: 0 12px;
+}
+
+.board-action-button {
+  width: 100%;
+  justify-content: center;
+}
+
+.board-card-actions {
+  align-items: stretch;
+}
+
+.board-column-empty {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px dashed rgba(20, 80, 189, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.board-card-error {
+  font-size: 0.86rem;
+  color: #b54747;
 }
 
 .workbench-task-card {
@@ -1496,6 +1735,7 @@ button {
   .chat-layout,
   .chat-inbox-shell,
   .workbench-layout,
+  .projects-workspace,
   .two-column-layout,
   .screen-header,
   .metric-grid,
@@ -1526,6 +1766,10 @@ button {
   .composer-footer,
   .panel-header,
   .rail-section-header,
+  .board-column-header,
+  .board-card-top,
+  .board-card-actions,
+  .board-stage-badges,
   .history-row,
   .usage-category-header,
   .usage-empty-actions,

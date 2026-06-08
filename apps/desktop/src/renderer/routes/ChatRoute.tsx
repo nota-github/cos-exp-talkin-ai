@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type {
   ChatFeedRunSummary,
   CloudModelId,
@@ -400,9 +400,14 @@ export function ChatInboxView({
 
 export function ChatRoute() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const desktopClient = getRendererDesktopClient();
   const queryCache = getDesktopQueryCache();
-  const chatFeedDescriptor = createDesktopQueryDescriptor('getChatFeed', {});
+  const requestedConversationId = searchParams.get('conversationId') ?? undefined;
+  const chatFeedDescriptor = createDesktopQueryDescriptor(
+    'getChatFeed',
+    requestedConversationId ? { conversationId: requestedConversationId } : {},
+  );
   const chatFeedQuery = useDesktopQuery(
     queryCache,
     chatFeedDescriptor,
@@ -523,6 +528,7 @@ export function ChatRoute() {
 
     const outcome = await submitChatPromptDraft({
       activeStarterId,
+      conversationId: chatFeedQuery.data?.activeConversationId ?? requestedConversationId,
       optimizationMode,
       promptDraft,
       selectedModel,
