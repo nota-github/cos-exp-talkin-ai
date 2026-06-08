@@ -160,6 +160,9 @@ export type ProjectTaskRecord = {
   taskId: string;
   title: string;
   status: TaskStatus;
+  sourceScreen: TaskSourceScreen;
+  summary: string | null;
+  conversationId: string | null;
   lastActivityAt: string;
 };
 

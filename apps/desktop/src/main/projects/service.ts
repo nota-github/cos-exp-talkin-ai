@@ -128,19 +128,40 @@ function mapRecentTask(nowIso: string, task: RecentTaskRecord) {
 }
 
 function mapProjectDetail(nowIso: string, record: ProjectDetailRecord): ProjectDetailResult {
+  const tasks = record.tasks.map((task) => ({
+    taskId: task.taskId,
+    title: task.title,
+    status: task.status,
+    sourceScreen: task.sourceScreen,
+    summary: task.summary,
+    conversationId: task.conversationId,
+    lastActivity: formatRelativeActivity(nowIso, task.lastActivityAt),
+    lastActivityAt: task.lastActivityAt,
+  }));
+
   return {
     projectId: record.id,
     name: record.name,
     description: record.description,
     goal: record.goal,
     updatedAt: record.updatedAt,
-    files: record.fileAssets.map((file) => file.displayName),
-    tasks: record.tasks.map((task) => ({
-      taskId: task.taskId,
+    files: record.fileAssets.map((file) => ({
+      fileId: file.id,
+      displayName: file.displayName,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+    })),
+    tasks,
+    recentActivity: tasks.slice(0, 4).map((task) => ({
+      activityId: `task-${task.taskId}`,
       title: task.title,
-      status: task.status,
-      lastActivity: formatRelativeActivity(nowIso, task.lastActivityAt),
-      lastActivityAt: task.lastActivityAt,
+      summary:
+        task.summary ??
+        `${task.sourceScreen} 화면에서 이어진 작업입니다. 한국어 응답과 후속 지시 흐름을 여기서 다시 이어갈 수 있습니다.`,
+      timestampLabel: task.lastActivity,
+      timestampAt: task.lastActivityAt,
+      taskId: task.taskId,
+      conversationId: task.conversationId,
     })),
   };
 }

@@ -8,11 +8,16 @@ import {
 } from '../lib/ipc/query-client';
 import { useDesktopQuery } from '../lib/ipc/query-hooks';
 import {
+  filterProjectTasks,
+  formatProjectFileSize,
   getBoardStatusLabel,
   getBoardSurfaceState,
   getProjectHubSurfaceState,
+  getProjectTaskSourceLabel,
   openBoardTaskInChat,
   openBoardTaskInWorkbench,
+  openProjectTaskInChat,
+  openProjectTaskInWorkbench,
   previewProjectDetails,
 } from './projects-surface';
 
@@ -105,6 +110,7 @@ export function ProjectsRoute() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>(emptyProjectDraft);
+  const [projectTaskSearch, setProjectTaskSearch] = useState('');
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [pendingTaskIds, setPendingTaskIds] = useState<Record<string, boolean>>({});
   const [taskErrors, setTaskErrors] = useState<Record<string, string | null>>({});
@@ -170,6 +176,10 @@ export function ProjectsRoute() {
     selectedProjectDetail?.goal,
   ]);
 
+  useEffect(() => {
+    setProjectTaskSearch('');
+  }, [isCreatingProject, resolvedSelectedProjectId]);
+
   async function handleMoveTaskStatus(card: BoardTaskCard, nextStatus: TaskStatus) {
     if (!desktopClient.available || nextStatus === card.status) {
       return;
@@ -222,6 +232,22 @@ export function ProjectsRoute() {
   function handleOpenInChat(card: BoardTaskCard) {
     openBoardTaskInChat({
       conversationId: card.conversationId,
+      navigate,
+    });
+  }
+
+  async function handleOpenProjectTaskInWorkbench(taskId: string) {
+    await openProjectTaskInWorkbench({
+      desktopAvailable: desktopClient.available,
+      navigate,
+      openInWorkbench: desktopClient.commands.openInWorkbench,
+      taskId,
+    });
+  }
+
+  function handleOpenProjectTaskInChat(conversationId: string | null) {
+    openProjectTaskInChat({
+      conversationId,
       navigate,
     });
   }
@@ -349,6 +375,8 @@ export function ProjectsRoute() {
   }
 
   const linkedTasks = selectedProjectDetail?.tasks ?? [];
+  const filteredLinkedTasks = filterProjectTasks(linkedTasks, projectTaskSearch);
+  const recentProjectActivity = selectedProjectDetail?.recentActivity ?? [];
   const recentTasks = projectHubState.recentTasks.filter(
     (task) => task.projectId !== resolvedSelectedProjectId,
   );
@@ -650,6 +678,279 @@ export function ProjectsRoute() {
                     <span>{desktopClient.available ? '실제 저장 가능' : '미리보기에서는 읽기 전용'}</span>
                   </div>
                 </form>
+              ) : null}
+            </article>
+
+            <article className="panel project-detail-hub">
+              <div className="panel-header">
+                <div>
+                  <span className="panel-kicker">프로젝트 상세 허브</span>
+                  <h3>
+                    {isCreatingProject
+                      ? '허브 저장 후 세부 맥락이 열립니다'
+                      : selectedProjectSummary
+                        ? `${selectedProjectSummary.name} 안에서 task, 파일, 대화 흐름을 함께 봅니다`
+                        : '프로젝트를 선택하면 세부 허브가 열립니다'}
+                  </h3>
+                  <p>
+                    선택한 프로젝트 안에서 연결된 task를 검색하고, 참고 파일과 최근 대화 맥락을
+                    한 화면에서 이어서 확인할 수 있습니다.
+                  </p>
+                </div>
+                <div className="project-detail-header-badges">
+                  <span className="badge badge-primary">{linkedTasks.length}개 task</span>
+                  <span className="badge badge-success">
+                    {selectedProjectDetail?.files.length ?? 0}개 파일
+                  </span>
+                </div>
+              </div>
+
+              {isCreatingProject ? (
+                <article className="project-state-card">
+                  <span className="panel-kicker">저장 후 허브 열림</span>
+                  <strong>프로젝트를 저장하면 상세 허브가 바로 채워집니다</strong>
+                  <p>먼저 이름과 목표를 저장한 뒤, 연결된 task와 참고 파일 맥락을 이 영역에서 함께 관리하세요.</p>
+                </article>
+              ) : null}
+
+              {!isCreatingProject && !selectedProjectSummary ? (
+                <article className="project-state-card">
+                  <span className="panel-kicker">허브 선택 필요</span>
+                  <strong>왼쪽에서 프로젝트를 고르면 장기 작업 허브가 열립니다</strong>
+                  <p>선택된 프로젝트마다 연결 task 검색, 파일 확인, 최근 대화 맥락이 이 자리에서 함께 보입니다.</p>
+                </article>
+              ) : null}
+
+              {showProjectDetailLoading ? (
+                <article className="project-state-card">
+                  <span className="panel-kicker">불러오는 중</span>
+                  <strong>선택한 프로젝트 허브를 불러오는 중입니다</strong>
+                  <p>연결된 task, 파일, 최근 대화 맥락을 한 번에 정리하는 동안 잠시만 기다려 주세요.</p>
+                </article>
+              ) : null}
+
+              {showProjectDetailError ? (
+                <article className="project-state-card project-state-card-error">
+                  <span className="panel-kicker">허브 동기화 오류</span>
+                  <strong>프로젝트 상세 허브를 불러오지 못했습니다</strong>
+                  <p>{projectDetailQuery.error?.message ?? '프로젝트 상세 상태를 다시 동기화해 주세요.'}</p>
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={() => {
+                      void queryCache.fetchQuery(projectDetailDescriptor);
+                    }}
+                  >
+                    다시 불러오기
+                  </button>
+                </article>
+              ) : null}
+
+              {!showProjectDetailLoading &&
+              !showProjectDetailError &&
+              !isCreatingProject &&
+              selectedProjectDetail ? (
+                <>
+                  <article className="project-detail-hero">
+                    <div className="project-detail-hero-copy">
+                      <span className="panel-kicker">허브 브리프</span>
+                      <strong>{selectedProjectDetail.description || selectedProjectDetail.name}</strong>
+                      <p>{selectedProjectDetail.goal || '아직 목표 설명이 없습니다. 상단 에디터에서 목표를 정리해 보세요.'}</p>
+                    </div>
+                    <div className="project-detail-hero-metrics">
+                      <div className="project-detail-metric">
+                        <span>연결된 task</span>
+                        <strong>{linkedTasks.length}</strong>
+                      </div>
+                      <div className="project-detail-metric">
+                        <span>최근 맥락</span>
+                        <strong>{recentProjectActivity.length}</strong>
+                      </div>
+                      <div className="project-detail-metric">
+                        <span>참고 파일</span>
+                        <strong>{selectedProjectDetail.files.length}</strong>
+                      </div>
+                    </div>
+                  </article>
+
+                  <div className="project-detail-grid">
+                    <section className="project-detail-section project-detail-task-section">
+                      <div className="project-detail-section-header">
+                        <div>
+                          <span className="panel-kicker">연결된 task 검색</span>
+                          <h4>이 프로젝트 안에서 바로 이어갈 작업</h4>
+                        </div>
+                        <span className="badge badge-muted">{filteredLinkedTasks.length}개 표시</span>
+                      </div>
+
+                      <label className="project-detail-search">
+                        <span>task 검색</span>
+                        <input
+                          value={projectTaskSearch}
+                          onChange={(event) => {
+                            setProjectTaskSearch(event.target.value);
+                          }}
+                          placeholder="제목, 요약, 상태, 시작 화면으로 검색"
+                        />
+                      </label>
+
+                      {linkedTasks.length === 0 ? (
+                        <article className="project-task-empty">
+                          <span className="panel-kicker">연결된 task 없음</span>
+                          <strong>아직 이 프로젝트에 묶인 작업이 없습니다</strong>
+                          <p>오른쪽 task 연결 명령에서 필요한 작업을 이 허브로 묶으면 여기에서 바로 검색하고 이어갈 수 있습니다.</p>
+                        </article>
+                      ) : filteredLinkedTasks.length > 0 ? (
+                        <div className="project-detail-task-list">
+                          {filteredLinkedTasks.map((task) => (
+                            <article
+                              key={task.taskId}
+                              className="project-detail-task-card"
+                            >
+                              <div className="project-detail-task-top">
+                                <span className={`board-status-badge board-status-badge-${task.status}`}>
+                                  {getBoardStatusLabel(task.status)}
+                                </span>
+                                <span className="project-detail-task-time">{task.lastActivity}</span>
+                              </div>
+                              <strong>{task.title}</strong>
+                              <p>
+                                {task.summary ??
+                                  '아직 저장된 대화 요약이 없습니다. 작업대나 채팅에서 이 task를 열어 맥락을 이어갈 수 있습니다.'}
+                              </p>
+                              <div className="project-detail-task-meta">
+                                <span>시작 화면 {getProjectTaskSourceLabel(task.sourceScreen)}</span>
+                                <span>{task.lastActivityAt.slice(0, 10)}</span>
+                              </div>
+                              <div className="project-detail-task-actions">
+                                <button
+                                  type="button"
+                                  className="primary-button"
+                                  disabled={!desktopClient.available}
+                                  onClick={() => {
+                                    void handleOpenProjectTaskInWorkbench(task.taskId);
+                                  }}
+                                >
+                                  작업대에서 이어가기
+                                </button>
+                                <button
+                                  type="button"
+                                  className="soft-button"
+                                  disabled={!task.conversationId}
+                                  onClick={() => {
+                                    handleOpenProjectTaskInChat(task.conversationId);
+                                  }}
+                                >
+                                  대화 열기
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <article className="project-task-empty">
+                          <span className="panel-kicker">검색 결과 없음</span>
+                          <strong>이 검색어와 맞는 task가 아직 없습니다</strong>
+                          <p>다른 키워드로 다시 찾거나 오른쪽 인박스에서 새 작업을 이 프로젝트에 연결해 보세요.</p>
+                        </article>
+                      )}
+                    </section>
+
+                    <div className="project-detail-side">
+                      <section className="project-detail-section">
+                        <div className="project-detail-section-header">
+                          <div>
+                            <span className="panel-kicker">참고 파일</span>
+                            <h4>프로젝트와 함께 보는 문서</h4>
+                          </div>
+                          <span className="badge badge-muted">{selectedProjectDetail.files.length}개</span>
+                        </div>
+
+                        {selectedProjectDetail.files.length > 0 ? (
+                          <div className="project-file-list">
+                            {selectedProjectDetail.files.map((file) => (
+                              <article
+                                key={file.fileId}
+                                className="project-file-card"
+                              >
+                                <strong>{file.displayName}</strong>
+                                <div className="project-file-meta">
+                                  <span>{file.mimeType}</span>
+                                  <span>{formatProjectFileSize(file.sizeBytes)}</span>
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <article className="project-file-empty">
+                            <span className="panel-kicker">아직 없음</span>
+                            <strong>첫 참고 파일이 아직 없습니다</strong>
+                            <p>파일 연결 기능이 준비되면 이 영역에 문서가 모입니다. 지금은 관련 task를 먼저 연결해 작업 맥락을 쌓아 두세요.</p>
+                          </article>
+                        )}
+                      </section>
+
+                      <section className="project-detail-section">
+                        <div className="project-detail-section-header">
+                          <div>
+                            <span className="panel-kicker">최근 대화 맥락</span>
+                            <h4>방금 이어진 의도와 후속 지시</h4>
+                          </div>
+                          <span className="badge badge-muted">{recentProjectActivity.length}개</span>
+                        </div>
+
+                        {recentProjectActivity.length > 0 ? (
+                          <div className="project-context-list">
+                            {recentProjectActivity.map((activity) => (
+                              <article
+                                key={activity.activityId}
+                                className="project-context-card"
+                              >
+                                <div className="project-context-top">
+                                  <strong>{activity.title}</strong>
+                                  <span>{activity.timestampLabel}</span>
+                                </div>
+                                <p>{activity.summary}</p>
+                                <div className="project-context-actions">
+                                  <button
+                                    type="button"
+                                    className="soft-button"
+                                    disabled={!activity.taskId || !desktopClient.available}
+                                    onClick={() => {
+                                      if (!activity.taskId) {
+                                        return;
+                                      }
+
+                                      void handleOpenProjectTaskInWorkbench(activity.taskId);
+                                    }}
+                                  >
+                                    작업대 열기
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="soft-button"
+                                    disabled={!activity.conversationId}
+                                    onClick={() => {
+                                      handleOpenProjectTaskInChat(activity.conversationId);
+                                    }}
+                                  >
+                                    대화 열기
+                                  </button>
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        ) : (
+                          <article className="project-task-empty">
+                            <span className="panel-kicker">맥락 없음</span>
+                            <strong>아직 최근 대화 맥락이 충분히 쌓이지 않았습니다</strong>
+                            <p>이 프로젝트에 task를 연결하고 대화를 한 번이라도 이어가면 최근 의도와 흐름이 여기로 모입니다.</p>
+                          </article>
+                        )}
+                      </section>
+                    </div>
+                  </div>
+                </>
               ) : null}
             </article>
           </section>

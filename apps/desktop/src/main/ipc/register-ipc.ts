@@ -75,7 +75,7 @@ type InternalProjectRecord = {
   description: string;
   goal: string;
   updatedAt: string;
-  files: string[];
+  files: ProjectDetailResult['files'];
 };
 
 type DesktopIpcState = {
@@ -481,7 +481,20 @@ function createInitialState(): DesktopIpcState {
         description: '국문 사업계획서와 파트너 제안 문서를 묶는 작업 공간',
         goal: '시장 진입 전략과 수익 모델을 한 흐름으로 정리',
         updatedAt: '2026-06-08T00:58:00.000Z',
-        files: ['partner-brief.pdf', 'pricing-notes.docx'],
+        files: [
+          {
+            fileId: 'file-001',
+            displayName: 'partner-brief.pdf',
+            mimeType: 'application/pdf',
+            sizeBytes: 3_941_122,
+          },
+          {
+            fileId: 'file-002',
+            displayName: 'pricing-notes.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            sizeBytes: 184_220,
+          },
+        ],
       },
       'project-002': {
         projectId: 'project-002',
@@ -489,7 +502,14 @@ function createInitialState(): DesktopIpcState {
         description: '장문 자료 요약과 비교 분석을 관리하는 프로젝트',
         goal: '핵심 경쟁사 포지셔닝을 1페이지 요약으로 축약',
         updatedAt: '2026-06-08T00:54:00.000Z',
-        files: ['research-pack.pdf'],
+        files: [
+          {
+            fileId: 'file-003',
+            displayName: 'research-pack.pdf',
+            mimeType: 'application/pdf',
+            sizeBytes: 8_412_100,
+          },
+        ],
       },
       'project-003': {
         projectId: 'project-003',
@@ -633,6 +653,9 @@ function buildProjectTaskSummaries(
       taskId: task.taskId,
       title: task.title,
       status: task.status,
+      sourceScreen: task.sourceScreen,
+      summary: task.preview,
+      conversationId: task.conversationId,
       lastActivity: task.lastActivity,
       lastActivityAt: task.lastActivityAt,
     }));
@@ -652,6 +675,19 @@ function buildProjectDetailFromState(
     updatedAt: project.updatedAt,
     files: [...project.files],
     tasks: buildProjectTaskSummaries(state, projectId),
+    recentActivity: buildProjectTaskSummaries(state, projectId)
+      .slice(0, 4)
+      .map((task) => ({
+        activityId: `task-${task.taskId}`,
+        title: task.title,
+        summary:
+          task.summary ??
+          `${task.sourceScreen} 화면에서 이어진 작업입니다. 한국어 응답과 후속 지시 흐름을 여기서 다시 이어갈 수 있습니다.`,
+        timestampLabel: task.lastActivity,
+        timestampAt: task.lastActivityAt,
+        taskId: task.taskId,
+        conversationId: task.conversationId,
+      })),
   };
 }
 

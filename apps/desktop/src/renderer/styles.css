@@ -660,9 +660,183 @@ button {
 
 .project-list-stack,
 .project-task-command-layout,
-.project-task-section {
+.project-task-section,
+.project-detail-side,
+.project-detail-task-list,
+.project-file-list,
+.project-context-list {
   display: grid;
   gap: 14px;
+}
+
+.project-detail-hub {
+  display: grid;
+  gap: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(239, 248, 255, 0.9) 64%, rgba(229, 251, 246, 0.72) 100%);
+}
+
+.project-detail-header-badges,
+.project-detail-task-meta,
+.project-context-actions,
+.project-file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.project-detail-header-badges {
+  justify-content: flex-end;
+}
+
+.project-detail-hero {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.16fr) minmax(240px, 0.84fr);
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(20, 80, 189, 0.12);
+  background:
+    radial-gradient(circle at top right, rgba(34, 118, 245, 0.12), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(244, 249, 255, 0.94) 58%, rgba(229, 251, 246, 0.78) 100%);
+}
+
+.project-detail-hero-copy,
+.project-detail-metric {
+  display: grid;
+  gap: 8px;
+}
+
+.project-detail-hero-copy p,
+.project-detail-task-card p,
+.project-file-empty p,
+.project-context-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.project-detail-hero-metrics {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.project-detail-metric {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(15, 39, 68, 0.08);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.project-detail-metric span,
+.project-detail-task-time,
+.project-file-meta,
+.project-context-top span {
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.project-detail-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.14fr) minmax(280px, 0.86fr);
+}
+
+.project-detail-section {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.project-detail-section-header,
+.project-detail-task-top,
+.project-detail-task-actions,
+.project-context-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.project-detail-section-header h4 {
+  margin: 6px 0 0;
+}
+
+.project-detail-search {
+  display: grid;
+  gap: 8px;
+}
+
+.project-detail-search span {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--blue-deep);
+}
+
+.project-detail-search input {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ink);
+  padding: 0 14px;
+}
+
+.project-detail-task-card,
+.project-file-card,
+.project-context-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(245, 249, 255, 0.9) 100%);
+}
+
+.project-detail-task-card {
+  background:
+    radial-gradient(circle at top right, rgba(34, 118, 245, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(245, 249, 255, 0.92) 100%);
+}
+
+.project-file-card {
+  gap: 10px;
+}
+
+.project-detail-task-meta,
+.project-file-meta {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.project-detail-task-actions .primary-button {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.project-detail-task-actions .soft-button,
+.project-context-actions .soft-button {
+  min-height: 46px;
+}
+
+.project-file-empty {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px dashed rgba(20, 80, 189, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.project-context-card {
+  background:
+    radial-gradient(circle at top right, rgba(55, 201, 171, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.99) 0%, rgba(244, 250, 248, 0.92) 100%);
 }
 
 .project-list-card,
@@ -725,7 +899,8 @@ button {
 
 .project-list-empty,
 .project-task-empty,
-.project-state-card {
+.project-state-card,
+.project-file-empty {
   border-radius: 24px;
   border: 1px dashed rgba(20, 80, 189, 0.18);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(240, 248, 255, 0.88) 100%);
@@ -1929,6 +2104,9 @@ button {
 
   .workbench-grid,
   .detail-grid,
+  .project-detail-grid,
+  .project-detail-hero,
+  .project-detail-hero-metrics,
   .usage-cumulative-grid,
   .usage-summary-grid,
   .usage-comparison-ledger,
@@ -1956,6 +2134,14 @@ button {
   .project-task-section-header,
   .project-editor-actions,
   .project-editor-footnote,
+  .project-detail-section-header,
+  .project-detail-task-top,
+  .project-detail-task-meta,
+  .project-detail-task-actions,
+  .project-detail-header-badges,
+  .project-context-top,
+  .project-context-actions,
+  .project-file-meta,
   .board-column-header,
   .board-card-top,
   .board-card-actions,
