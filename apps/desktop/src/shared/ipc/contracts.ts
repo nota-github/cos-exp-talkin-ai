@@ -12,6 +12,7 @@ export const queryNames = [
   'getBoardColumns',
   'getProjectDetail',
   'getUsageDashboard',
+  'getHistoryFeed',
   'getHistoryEntry',
   'getSettings',
 ] as const;
@@ -39,6 +40,7 @@ export const ipcChannels: {
     getBoardColumns: 'talkin-ai:query:getBoardColumns',
     getProjectDetail: 'talkin-ai:query:getProjectDetail',
     getUsageDashboard: 'talkin-ai:query:getUsageDashboard',
+    getHistoryFeed: 'talkin-ai:query:getHistoryFeed',
     getHistoryEntry: 'talkin-ai:query:getHistoryEntry',
     getSettings: 'talkin-ai:query:getSettings',
   },
@@ -263,16 +265,52 @@ export type HistoryEntryQuery = {
   runId: string;
 };
 
+export type HistoryFeedQuery = EmptyPayload;
+
+export type HistoryFeedItem = {
+  runId: string;
+  taskId: string;
+  title: string;
+  finalResponsePreview: string;
+  model: CloudModelId;
+  mode: OptimizationMode;
+  completedAt: string | null;
+  savingsRate: number;
+  tokenReduction: number;
+};
+
+export type HistoryFeedResult = {
+  items: HistoryFeedItem[];
+};
+
+export type HistoryArtifactEvidence = {
+  content: string;
+  tokenEstimate: number | null;
+};
+
+export type HistoryEntryUsageSummary = {
+  baselineInputTokens: number;
+  optimizedInputTokens: number;
+  outputTokens: number;
+  tokenReduction: number;
+  savingsRate: number;
+  estimatedSavingsUsd: number;
+  pricingVersion: string;
+  isEstimated: boolean;
+};
+
 export type HistoryEntryResult = {
   runId: string;
   taskId: string;
-  promptKo: string;
-  optimizedPromptEn: string;
-  restoredResponseKo: string;
-  baselineTokens: number;
-  optimizedTokens: number;
-  savingsRate: number;
-  provider: CloudModelId;
+  title: string;
+  model: CloudModelId;
+  mode: OptimizationMode;
+  completedAt: string | null;
+  sourcePromptKo: HistoryArtifactEvidence;
+  optimizedPromptEn: HistoryArtifactEvidence | null;
+  providerResponseEn: HistoryArtifactEvidence | null;
+  finalResponseKo: HistoryArtifactEvidence;
+  usage: HistoryEntryUsageSummary;
 };
 
 export type SettingsQuery = EmptyPayload;
@@ -376,6 +414,10 @@ export type DesktopQueryDefinitions = {
     request: UsageDashboardQuery;
     response: UsageDashboardResult;
   };
+  getHistoryFeed: {
+    request: HistoryFeedQuery;
+    response: HistoryFeedResult;
+  };
   getHistoryEntry: {
     request: HistoryEntryQuery;
     response: HistoryEntryResult;
@@ -400,6 +442,7 @@ export type InvalidationTarget =
         | 'boardColumns'
         | 'projectDetail'
         | 'usageDashboard'
+        | 'historyFeed'
         | 'historyEntry'
         | 'settings';
       keys?: string[];

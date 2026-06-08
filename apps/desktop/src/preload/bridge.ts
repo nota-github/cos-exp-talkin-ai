@@ -59,6 +59,7 @@ export function createTalkinAIDesktopApi(
         getBoardColumns: (request) => invokeQuery(ipcRenderer, 'getBoardColumns', request),
         getProjectDetail: (request) => invokeQuery(ipcRenderer, 'getProjectDetail', request),
         getUsageDashboard: (request) => invokeQuery(ipcRenderer, 'getUsageDashboard', request),
+        getHistoryFeed: (request) => invokeQuery(ipcRenderer, 'getHistoryFeed', request),
         getHistoryEntry: (request) => invokeQuery(ipcRenderer, 'getHistoryEntry', request),
         getSettings: (request) => invokeQuery(ipcRenderer, 'getSettings', request),
       },

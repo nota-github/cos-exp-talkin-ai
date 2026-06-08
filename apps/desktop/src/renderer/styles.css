@@ -823,6 +823,187 @@ button {
   gap: 18px;
 }
 
+.usage-history-panel,
+.usage-history-state-card {
+  display: grid;
+  gap: 18px;
+}
+
+.usage-history-panel {
+  padding: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(34, 118, 245, 0.08), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(241, 249, 255, 0.92) 100%);
+}
+
+.usage-history-state-card-error,
+.usage-history-detail-state-error {
+  border: 1px solid rgba(180, 64, 64, 0.18);
+  background: rgba(255, 246, 246, 0.95);
+}
+
+.usage-history-layout,
+.usage-history-metrics,
+.usage-history-artifact-list,
+.usage-history-reveal-list {
+  display: grid;
+  gap: 16px;
+}
+
+.usage-history-layout {
+  grid-template-columns: minmax(280px, 0.88fr) minmax(0, 1.32fr);
+  align-items: start;
+}
+
+.usage-history-list,
+.usage-history-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.usage-history-list {
+  padding-right: 6px;
+}
+
+.usage-history-list-header,
+.usage-history-detail-header,
+.usage-history-artifact-header,
+.usage-history-row-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.usage-history-list-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.usage-history-row {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  font: inherit;
+  text-align: left;
+  border-radius: 20px;
+  border: 1px solid rgba(20, 80, 189, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 12px 24px rgba(31, 86, 151, 0.04);
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  cursor: pointer;
+}
+
+.usage-history-row:hover {
+  transform: translateY(-1px);
+  border-color: rgba(20, 80, 189, 0.18);
+  box-shadow: 0 16px 26px rgba(31, 86, 151, 0.08);
+}
+
+.usage-history-row-active {
+  border-color: rgba(20, 80, 189, 0.26);
+  background: linear-gradient(180deg, rgba(34, 118, 245, 0.08) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.usage-history-row-meta {
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.usage-history-detail {
+  min-height: 100%;
+  padding: 20px;
+  border-radius: 24px;
+  border: 1px solid rgba(20, 80, 189, 0.1);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.usage-history-detail h4 {
+  margin: 0;
+  font-size: 1.28rem;
+}
+
+.usage-history-detail-badges {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.usage-history-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.usage-history-metric-card {
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(247, 251, 255, 0.92);
+}
+
+.usage-history-metric-card-savings {
+  background: linear-gradient(180deg, rgba(55, 201, 171, 0.16) 0%, rgba(255, 255, 255, 0.96) 100%);
+  border-color: rgba(55, 201, 171, 0.2);
+}
+
+.usage-history-artifact-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+}
+
+.usage-history-artifact-card-result {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(229, 251, 246, 0.72) 100%);
+}
+
+.usage-history-artifact-card-source {
+  background: rgba(245, 249, 255, 0.94);
+}
+
+.usage-history-artifact-card-advanced {
+  background: rgba(249, 251, 255, 0.96);
+}
+
+.usage-history-artifact-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  line-height: 1.68;
+  color: var(--text);
+}
+
+.usage-history-reveal-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px dashed rgba(20, 80, 189, 0.18);
+  background: rgba(250, 252, 255, 0.9);
+}
+
+.usage-history-reveal-button {
+  justify-self: start;
+}
+
+.usage-history-detail-state {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: rgba(248, 251, 255, 0.92);
+}
+
+.usage-history-footnote {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 .usage-summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -1095,7 +1276,9 @@ button {
   .usage-cumulative-grid,
   .usage-summary-grid,
   .usage-comparison-ledger,
-  .usage-empty-state {
+  .usage-empty-state,
+  .usage-history-layout,
+  .usage-history-metrics {
     grid-template-columns: 1fr;
   }
 }
@@ -1112,7 +1295,10 @@ button {
   .rail-section-header,
   .history-row,
   .usage-category-header,
-  .usage-empty-actions {
+  .usage-empty-actions,
+  .usage-history-list-header,
+  .usage-history-detail-header,
+  .usage-history-artifact-header {
     grid-template-columns: 1fr;
     display: grid;
   }

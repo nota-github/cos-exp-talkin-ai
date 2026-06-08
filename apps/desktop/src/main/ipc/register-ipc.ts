@@ -14,6 +14,7 @@ import {
   type DesktopQueryRequest,
   type DesktopQueryResponse,
   type HistoryEntryResult,
+  type HistoryFeedResult,
   type InvalidationTarget,
   type PanelSlot,
   type ProjectDetailResult,
@@ -22,6 +23,7 @@ import {
   type WorkbenchLayoutResult,
 } from '../../shared/ipc/contracts';
 import type { ChatHistoryService } from '../chat/index.ts';
+import type { HistoryInspectionService } from '../history/index.ts';
 import {
   createInMemoryAppSettingsService,
   defaultAppSettings,
@@ -91,6 +93,7 @@ export type RegisterDesktopIpcOptions = {
     nextState: DesktopIpcState,
   ) => Promise<void> | void;
   state?: DesktopIpcState;
+  historyInspectionService?: HistoryInspectionService;
   settingsService?: AppSettingsService;
   translationAdapter?: TranslationMcpAdapter;
   usageDashboardService?: UsageDashboardService;
@@ -447,15 +450,39 @@ function createInitialState(): DesktopIpcState {
       'run-001': {
         runId: 'run-001',
         taskId: primaryTask.taskId,
-        promptKo: '시장 진입 전략이 보이도록 사업계획서 초안을 목차 중심으로 정리해줘.',
-        optimizedPromptEn:
-          'Draft a business plan outline focused on market entry strategy. Preserve headings and numbered sections.',
-        restoredResponseKo:
-          '시장 진입 전략을 먼저 보여주는 구조로 사업계획서 목차 초안을 정리했습니다.',
-        baselineTokens: 1240,
-        optimizedTokens: 756,
-        savingsRate: 39,
-        provider: 'claude-sonnet-4',
+        title: primaryTask.title,
+        model: primaryTask.model,
+        mode: primaryTask.mode,
+        completedAt: '2026-06-08T01:18:00.000Z',
+        sourcePromptKo: {
+          content: '시장 진입 전략이 보이도록 사업계획서 초안을 목차 중심으로 정리해줘.',
+          tokenEstimate: 1240,
+        },
+        optimizedPromptEn: {
+          content:
+            'Draft a business plan outline focused on market entry strategy. Preserve headings and numbered sections.',
+          tokenEstimate: 756,
+        },
+        providerResponseEn: {
+          content:
+            '1. Executive Summary\n2. Problem and Market Context\n3. Market Entry Strategy\n4. Revenue Model\n5. Rollout Milestones',
+          tokenEstimate: 488,
+        },
+        finalResponseKo: {
+          content:
+            '시장 진입 전략을 먼저 보여주는 구조로 사업계획서 목차 초안을 정리했습니다.',
+          tokenEstimate: 522,
+        },
+        usage: {
+          baselineInputTokens: 1240,
+          optimizedInputTokens: 756,
+          outputTokens: 488,
+          tokenReduction: 484,
+          savingsRate: 39,
+          estimatedSavingsUsd: 1.16,
+          pricingVersion: 'anthropic-claude-sonnet-4-2026-06',
+          isEstimated: false,
+        },
       },
     },
     tasks,
@@ -488,6 +515,28 @@ function sortTasksForChatFeed(tasks: Record<string, InternalTaskRecord>) {
       savingsRate: task.savingsRate,
       updatedAt: task.lastActivity,
     }));
+}
+
+function buildHistoryFeedFromState(state: DesktopIpcState): HistoryFeedResult {
+  return {
+    items: Object.values(state.historyEntries)
+      .map((entry) => ({
+        runId: entry.runId,
+        taskId: entry.taskId,
+        title: entry.title,
+        finalResponsePreview:
+          entry.finalResponseKo.content.replace(/\s+/g, ' ').trim() ||
+          '최종 한국어 응답이 아직 저장되지 않았습니다.',
+        model: entry.model,
+        mode: entry.mode,
+        completedAt: entry.completedAt,
+        savingsRate: entry.usage.savingsRate,
+        tokenReduction: entry.usage.tokenReduction,
+      }))
+      .sort((left, right) =>
+        (right.completedAt ?? '').localeCompare(left.completedAt ?? ''),
+      ),
+  };
 }
 
 function stageSubmittedPromptInState(
@@ -560,15 +609,34 @@ function stageSubmittedPromptInState(
   draftState.historyEntries[ids.runId] = {
     runId: ids.runId,
     taskId: ids.taskId,
-    promptKo: request.promptKo,
-    optimizedPromptEn:
-      'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
-    restoredResponseKo:
-      '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
-    baselineTokens: tokenBaseline,
-    optimizedTokens: tokenOptimized,
-    savingsRate,
-    provider: request.selectedModel,
+    title,
+    model: request.selectedModel,
+    mode: request.optimizationMode,
+    completedAt: null,
+    sourcePromptKo: {
+      content: request.promptKo,
+      tokenEstimate: tokenBaseline,
+    },
+    optimizedPromptEn: {
+      content:
+        'Condense the Korean task into an English prompt while preserving constraints, nouns, and output structure.',
+      tokenEstimate: tokenOptimized,
+    },
+    providerResponseEn: null,
+    finalResponseKo: {
+      content: '이 작업은 로컬 최적화 이후 클라우드 추론을 기다리는 상태입니다.',
+      tokenEstimate: null,
+    },
+    usage: {
+      baselineInputTokens: tokenBaseline,
+      optimizedInputTokens: tokenOptimized,
+      outputTokens: 0,
+      tokenReduction: Math.max(0, tokenBaseline - tokenOptimized),
+      savingsRate,
+      estimatedSavingsUsd: 0,
+      pricingVersion: 'openai-gpt-4.1-2026-06',
+      isEstimated: true,
+    },
   };
 
   applyUsageDashboardDelta(
@@ -621,8 +689,12 @@ function stageRetriedRunInState(
   draftState.historyEntries[result.runId] = {
     ...entry,
     runId: result.runId,
-    restoredResponseKo:
-      '재시도 요청이 접수되었습니다. 이전 한국어 입력과 기존 응답은 그대로 유지됩니다.',
+    completedAt: null,
+    providerResponseEn: null,
+    finalResponseKo: {
+      content: '재시도 요청이 접수되었습니다. 이전 한국어 입력과 기존 응답은 그대로 유지됩니다.',
+      tokenEstimate: null,
+    },
   };
 }
 
@@ -701,6 +773,7 @@ function emitInvalidation(
 export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {}): DesktopIpcService {
   let state = clone(options.state ?? createInitialState());
   const chatHistoryService = options.chatHistoryService ?? null;
+  const historyInspectionService = options.historyInspectionService ?? null;
   const settingsService = options.settingsService ?? createInMemoryAppSettingsService(defaultAppSettings);
   const translationAdapter = options.translationAdapter ?? null;
   const usageDashboardService = options.usageDashboardService ?? null;
@@ -771,6 +844,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               },
               {
                 kind: 'projection',
+                projection: 'historyFeed',
+              },
+              {
+                kind: 'projection',
                 projection: 'historyEntry',
               },
               {
@@ -830,6 +907,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
             },
             {
               kind: 'projection',
+              projection: 'historyFeed',
+            },
+            {
+              kind: 'projection',
               projection: 'historyEntry',
               keys: [runId],
             },
@@ -855,6 +936,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
               {
                 kind: 'projection',
                 projection: 'chatFeed',
+              },
+              {
+                kind: 'projection',
+                projection: 'historyFeed',
               },
               {
                 kind: 'projection',
@@ -885,6 +970,10 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
             {
               kind: 'projection',
               projection: 'chatFeed',
+            },
+            {
+              kind: 'projection',
+              projection: 'historyFeed',
             },
             {
               kind: 'projection',
@@ -1026,7 +1115,14 @@ export function createDesktopIpcService(options: RegisterDesktopIpcOptions = {})
       usageDashboardService
         ? usageDashboardService.getUsageDashboard(request)
         : clone(state.usageDashboards[request.range]),
-    getHistoryEntry: async (request) => clone(ensureHistoryEntry(state, request.runId)),
+    getHistoryFeed: async (request) =>
+      historyInspectionService
+        ? historyInspectionService.getHistoryFeed(request)
+        : clone(buildHistoryFeedFromState(state)),
+    getHistoryEntry: async (request) =>
+      historyInspectionService
+        ? historyInspectionService.getHistoryEntry(request)
+        : clone(ensureHistoryEntry(state, request.runId)),
     getSettings: async () => settingsService.getSettings(),
   };
 
