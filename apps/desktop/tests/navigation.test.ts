@@ -5,12 +5,12 @@ import { defaultRoutePath, navigationItems } from '../src/renderer/app/navigatio
 test('story-1.1:AC-1 defaults to the Chat route', () => {
   assert.equal(defaultRoutePath, '/');
   assert.equal(navigationItems[0]?.id, 'chat');
-  assert.equal(navigationItems[0]?.label, 'Chat');
+  assert.equal(navigationItems[0]?.label, '채팅');
 });
 
 test('story-1.1:AC-2 exposes all required global navigation items', () => {
   assert.deepEqual(
     navigationItems.map((item) => item.label),
-    ['Chat', 'Workbench', 'Projects', 'Usage', 'Settings'],
+    ['채팅', '작업대', '프로젝트', '사용량', '설정'],
   );
 });
